@@ -1,42 +1,21 @@
-"use client";
+import { redirect } from "next/navigation";
+import { createSupabaseServer } from "@/lib/supabase-server";
+import LoginForm from "./login-form";
 
-import { useFormState, useFormStatus } from "react-dom";
-import { sendMagicLink } from "./actions";
+export const dynamic = "force-dynamic";
 
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button className="rc-btn primary" type="submit" disabled={pending} style={{ width: "100%", marginTop: 16 }}>
-      {pending ? "Sending…" : "Send magic link"}
-    </button>
-  );
-}
+// Server-side: if the owner is already signed in, skip the form and go home.
+// (This replaces the redirect the Edge middleware used to do.)
+export default async function LoginPage() {
+  const supabase = await createSupabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export default function LoginPage() {
-  const [state, formAction] = useFormState(sendMagicLink, null);
+  const owner = process.env.OWNER_EMAIL?.toLowerCase();
+  if (user && (!owner || user.email?.toLowerCase() === owner)) {
+    redirect("/");
+  }
 
-  return (
-    <div className="rc-login">
-      <div className="rc-card-login">
-        <h1 className="rc-h1">Recirculate</h1>
-        <p className="rc-sub">Sign in to get your clips back in rotation.</p>
-        <form action={formAction}>
-          <label className="rc-label" htmlFor="email">Email</label>
-          <input
-            className="rc-input"
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            required
-          />
-          <SubmitButton />
-        </form>
-        {state && (
-          <div className={"rc-msg " + (state.ok ? "ok" : "err")}>{state.message}</div>
-        )}
-      </div>
-    </div>
-  );
+  return <LoginForm />;
 }
