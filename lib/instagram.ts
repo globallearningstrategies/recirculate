@@ -5,6 +5,8 @@
 const GRAPH = "https://graph.instagram.com";
 const VERSION = "v22.0";
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export type IGMedia = {
   id: string;
   caption?: string;
@@ -89,4 +91,55 @@ export async function downloadVideo(
   if (!res.ok) throw new Error(`Could not download reel video: ${res.status}`);
   const contentType = res.headers.get("content-type") || "video/mp4";
   return { bytes: await res.arrayBuffer(), contentType };
+}
+
+// Publishes a reel to the connected account. Three steps, per the Instagram API:
+//   1. Create a media container from a PUBLIC video URL (our clips bucket is public).
+//   2. Poll the container until Instagram finishes processing the video.
+//   3. Publish the container.
+// Needs the instagram_business_content_publish permission on the token.
+// Rate limit: 25 published posts per 24h. Returns the published media id.
+export async function publishReel(
+  accessToken: string,
+  videoUrl: string,
+  caption: string
+): Promise<string> {
+  // 1) container
+  const createRes = await fetch(`${GRAPH}/${VERSION}/me/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ media_type: "REELS", video_url: videoUrl, caption, access_token: accessToken }),
+  });
+  const created: any = await createRes.json();
+  if (!createRes.ok || !created?.id) {
+    throw new Error("Instagram container failed: " + (created?.error?.message || JSON.stringify(created)));
+  }
+
+  // 2) wait for processing (reels need a transcode pass)
+  let finished = false;
+  for (let i = 0; i < 30; i++) {
+    await sleep(5000);
+    const statusUrl = `${GRAPH}/${VERSION}/${created.id}?fields=status_code&access_token=${encodeURIComponent(accessToken)}`;
+    const s: any = await (await fetch(statusUrl)).json();
+    if (s?.status_code === "FINISHED") {
+      finished = true;
+      break;
+    }
+    if (s?.status_code === "ERROR") {
+      throw new Error("Instagram hit an error while processing the reel.");
+    }
+  }
+  if (!finished) throw new Error("Instagram took too long to process the reel — try again in a moment.");
+
+  // 3) publish
+  const pubRes = await fetch(`${GRAPH}/${VERSION}/me/media_publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ creation_id: created.id, access_token: accessToken }),
+  });
+  const published: any = await pubRes.json();
+  if (!pubRes.ok || !published?.id) {
+    throw new Error("Instagram publish failed: " + (published?.error?.message || JSON.stringify(published)));
+  }
+  return published.id as string;
 }

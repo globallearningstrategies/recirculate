@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, ExternalLink, LogOut, Download, Music } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
-import { PLATFORMS, PK, HOME, Icon, type Platform } from "@/lib/platforms";
+import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
 type Cadence = Record<Platform, number>;
 
@@ -49,6 +49,8 @@ export default function RecirculateApp({ email }: { email: string }) {
   const [copied, setCopied] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [posting, setPosting] = useState<string | null>(null);
+  const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const publicUrl = useCallback(
     (path: string) => supabase.storage.from("clips").getPublicUrl(path).data.publicUrl,
@@ -160,6 +162,34 @@ export default function RecirculateApp({ email }: { email: string }) {
   const remove = async (id: string) => {
     setReels((rs) => rs.filter((r) => r.id !== id));
     await supabase.from("clips").delete().eq("id", id); // cascades clip_platforms
+  };
+
+  // Real publish: posts the clip to the selected platform, then advances the
+  // rotation server-side. This posts to the live account, so we confirm first.
+  const publishClip = async (clip: Reel) => {
+    if (posting) return;
+    const name = PLATFORMS[plat].name;
+    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.`)) return;
+    setPosting(clip.id);
+    setPostMsg(null);
+    try {
+      const res = await fetch(`/api/post/${plat}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clipId: clip.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPostMsg({ ok: false, text: data?.error || "Publish failed." });
+      } else {
+        setPostMsg({ ok: true, text: `Published "${clip.title}" to ${name}. 🎉` });
+        await load();
+      }
+    } catch (e: any) {
+      setPostMsg({ ok: false, text: e?.message || "Publish failed." });
+    } finally {
+      setPosting(null);
+    }
   };
 
   const runImport = async () => {
@@ -298,17 +328,22 @@ export default function RecirculateApp({ email }: { email: string }) {
             {upNext.caption && <div className="rc-cap">{upNext.caption}</div>}
             {upNext.hashtags && <div className="rc-tags">{upNext.hashtags}</div>}
             <div className="rc-actions">
+              <button className="rc-btn primary" onClick={() => publishClip(upNext)} disabled={posting === upNext.id}>
+                <Send size={15} /> {posting === upNext.id ? "Publishing…" : `Publish to ${acc.name}`}
+              </button>
               <button className="rc-btn ghost" onClick={() => copyCaption(upNext)}>
                 {copied ? <Check size={15} /> : <Copy size={15} />}
                 {copied ? "Copied" : "Copy caption"}
               </button>
-              <a className="rc-btn ghost" href={upNext.links[plat] || HOME[plat]} target="_blank" rel="noreferrer">
-                <ExternalLink size={15} /> Open clip
-              </a>
-              <button className="rc-btn primary" onClick={() => markPosted(upNext)}>
-                <Check size={15} /> Mark as posted
+              <button className="rc-btn ghost" onClick={() => markPosted(upNext)} title="Just record it as posted without publishing">
+                <Check size={15} /> Mark posted
               </button>
             </div>
+            {postMsg && (
+              <div className={"rc-msg " + (postMsg.ok ? "ok" : "err")} style={{ marginTop: 12 }}>
+                {postMsg.text}
+              </div>
+            )}
           </div>
         ) : (
           <div className="rc-empty">
@@ -399,6 +434,17 @@ export default function RecirculateApp({ email }: { email: string }) {
                   </div>
                 )}
               </div>
+              {r.platforms[plat] && (
+                <button
+                  className="rc-icbtn"
+                  onClick={() => publishClip(r)}
+                  disabled={posting === r.id}
+                  aria-label={`Publish to ${acc.name} now`}
+                  title={`Publish to ${acc.name} now`}
+                >
+                  <Send size={15} />
+                </button>
+              )}
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
               </button>
