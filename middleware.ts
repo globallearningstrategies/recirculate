@@ -1,66 +1,41 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
-type CookieToSet = { name: string; value: string; options: CookieOptions };
-
-// Refreshes the Supabase auth session on every request and gates the whole app:
-// an unauthenticated visitor (or anyone who isn't the owner) is sent to /login.
-export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet: CookieToSet[]) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
+// Lightweight, Edge-safe auth gate.
+//
+// We deliberately do NOT import the Supabase client here: bundling
+// @supabase/ssr (and its supabase-js chain) into the Vercel Edge runtime drags
+// in Node-only code that references `__dirname` and crashes the middleware.
+// Instead this does a fast presence check on the Supabase auth cookie and
+// redirects unauthenticated visitors to /login. Real validation — confirming
+// the session is valid AND belongs to the owner — happens server-side in
+// app/page.tsx (and the route handlers), and token refresh is handled by the
+// browser client. So this is purely a UX redirect, not the security boundary.
+function hasSupabaseSession(request: NextRequest): boolean {
+  // @supabase/ssr stores the session in cookie(s) named sb-<ref>-auth-token
+  // (sometimes chunked with .0/.1 suffixes).
+  return request.cookies.getAll().some(
+    (c) => /^sb-.*-auth-token(\.\d+)?$/.test(c.name) && !!c.value
   );
+}
 
-  // IMPORTANT: getUser() revalidates the token; do not trust getSession() here.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
+  const signedIn = hasSupabaseSession(request);
 
-  const owner = process.env.OWNER_EMAIL?.toLowerCase();
-  const isOwner = !!user && (!owner || user.email?.toLowerCase() === owner);
-
-  // Signed-in non-owner: refuse and bounce to login.
-  if (user && !isOwner && !isAuthRoute) {
-    await supabase.auth.signOut();
+  if (!signedIn && !isAuthRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // Not signed in and not on an auth route: send to login.
-  if (!isOwner && !isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
-
-  // Already signed in but sitting on /login: send home.
-  if (isOwner && pathname.startsWith("/login")) {
+  if (signedIn && pathname.startsWith("/login")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {
