@@ -29,7 +29,7 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
 .rc-step:hover{border-color:var(--acc-a)}
 .rc-num{font-family:'Space Grotesk';font-weight:700;font-size:18px;min-width:20px;text-align:center}
 .rc-hero{position:relative;border-radius:20px;padding:20px;overflow:hidden;background:linear-gradient(160deg,var(--surface2),var(--surface));border:1px solid var(--line)}
-.rc-hero.due:before{content:"";position:absolute;inset:0;border-radius:20px;padding:1px;
+.rc-hero.due:before{content:"";position:absolute;inset:0;border-radius:20px;padding:1px;pointer-events:none;
   background:linear-gradient(135deg,var(--acc-a),var(--acc-b));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude;animation:rc-pulse 2.6s ease-in-out infinite}
 @keyframes rc-pulse{0%,100%{opacity:.5}50%{opacity:1}}
