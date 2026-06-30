@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, ExternalLink, LogOut } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, ExternalLink, LogOut, Download, Music } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, HOME, Icon, type Platform } from "@/lib/platforms";
 
@@ -13,6 +13,8 @@ type Reel = {
   caption: string;
   hashtags: string;
   video_path: string | null;
+  source: string | null;
+  licensed_audio: boolean;
   links: Record<Platform, string>;
   platforms: Record<Platform, boolean>;
   posted: Record<Platform, string | null>;
@@ -27,6 +29,7 @@ type ReelFormData = {
   platforms: Record<Platform, boolean>;
   links: Record<Platform, string>;
   video_path: string | null;
+  licensed_audio: boolean;
 };
 
 const DEFAULT_CADENCE: Cadence = { instagram: 5, tiktok: 4, youtube: 7 };
@@ -44,6 +47,8 @@ export default function RecirculateApp({ email }: { email: string }) {
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const publicUrl = useCallback(
     (path: string) => supabase.storage.from("clips").getPublicUrl(path).data.publicUrl,
@@ -55,7 +60,7 @@ export default function RecirculateApp({ email }: { email: string }) {
     const [{ data: clipRows }, { data: settingRows }] = await Promise.all([
       supabase
         .from("clips")
-        .select("id,title,caption,hashtags,video_path,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
+        .select("id,title,caption,hashtags,video_path,source,licensed_audio,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
         .order("created_at", { ascending: true }),
       supabase.from("settings").select("platform,cadence_days"),
     ]);
@@ -69,6 +74,8 @@ export default function RecirculateApp({ email }: { email: string }) {
         caption: c.caption ?? "",
         hashtags: c.hashtags ?? "",
         video_path: c.video_path ?? null,
+        source: c.source ?? null,
+        licensed_audio: !!c.licensed_audio,
         links: { instagram: byPlat.instagram?.link ?? "", tiktok: byPlat.tiktok?.link ?? "", youtube: byPlat.youtube?.link ?? "" },
         platforms: {
           instagram: !!byPlat.instagram?.enabled,
@@ -155,6 +162,28 @@ export default function RecirculateApp({ email }: { email: string }) {
     await supabase.from("clips").delete().eq("id", id); // cascades clip_platforms
   };
 
+  const runImport = async () => {
+    if (importing) return;
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await fetch("/api/import/instagram", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) {
+        setImportMsg({ ok: false, text: body?.error || "Import failed." });
+      } else {
+        const { added, skipped, errors } = body as { added: number; skipped: number; errors?: any[] };
+        const extra = errors?.length ? ` · ${errors.length} error${errors.length === 1 ? "" : "s"}` : "";
+        setImportMsg({ ok: true, text: `Imported ${added} new · skipped ${skipped} already in library${extra}.` });
+        await load();
+      }
+    } catch (e: any) {
+      setImportMsg({ ok: false, text: e?.message || "Import failed." });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const copyCaption = (r: Reel) => {
     const t = [r.caption, r.hashtags].filter(Boolean).join("\n\n");
     if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {});
@@ -168,12 +197,12 @@ export default function RecirculateApp({ email }: { email: string }) {
     if (clipId) {
       await supabase
         .from("clips")
-        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path })
+        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, licensed_audio: data.licensed_audio })
         .eq("id", clipId);
     } else {
       const { data: inserted, error } = await supabase
         .from("clips")
-        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path })
+        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, licensed_audio: data.licensed_audio })
         .select("id")
         .single();
       if (error || !inserted) return;
@@ -310,12 +339,23 @@ export default function RecirculateApp({ email }: { email: string }) {
           <h2>
             Library {reels.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {reels.length}</span>}
           </h2>
-          {editing !== "new" && (
-            <button className="rc-add" onClick={() => setEditing("new")}>
-              <Plus size={14} /> Add clip
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="rc-add" onClick={runImport} disabled={importing} title="Pull your Instagram Reels into the library">
+              <Download size={14} /> {importing ? "Importing…" : "Import from Instagram"}
             </button>
-          )}
+            {editing !== "new" && (
+              <button className="rc-add" onClick={() => setEditing("new")}>
+                <Plus size={14} /> Add clip
+              </button>
+            )}
+          </div>
         </div>
+
+        {importMsg && (
+          <div className={"rc-msg " + (importMsg.ok ? "ok" : "err")} style={{ marginBottom: 10 }}>
+            {importMsg.text}
+          </div>
+        )}
 
         {editing === "new" && <ReelForm onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
 
@@ -345,6 +385,20 @@ export default function RecirculateApp({ email }: { email: string }) {
                       : `${acc.name}: never posted`
                     : `Not in ${acc.name} rotation`}
                 </p>
+                {(r.source === "instagram" || r.licensed_audio) && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                    {r.source === "instagram" && (
+                      <span className="rc-tag-chip">
+                        <Icon p="instagram" size={11} color="var(--lilac)" /> Imported
+                      </span>
+                    )}
+                    {r.licensed_audio && (
+                      <span className="rc-tag-chip warn" title="Uses Instagram licensed music — may trip Content ID on TikTok/YouTube">
+                        <Music size={11} /> Licensed audio
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
@@ -381,6 +435,7 @@ function ReelForm({
   );
   const [links, setLinks] = useState<Record<Platform, string>>(reel?.links || emptyMap(""));
   const [videoPath, setVideoPath] = useState<string | null>(reel?.video_path ?? null);
+  const [licensedAudio, setLicensedAudio] = useState<boolean>(reel?.licensed_audio ?? false);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -407,7 +462,7 @@ function ReelForm({
         }
         path = key;
       }
-      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path });
+      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path, licensed_audio: licensedAudio });
     } finally {
       setBusy(false);
     }
@@ -433,6 +488,17 @@ function ReelForm({
         {file && <div style={{ marginTop: 6 }}>Selected: {file.name}</div>}
         {videoPath && !file && <div style={{ marginTop: 4 }}>Current: {videoPath.split("/").pop()}</div>}
       </div>
+
+      <button
+        type="button"
+        className={"rc-tog" + (licensedAudio ? " on" : "")}
+        onClick={() => setLicensedAudio((v) => !v)}
+        style={licensedAudio ? { background: "linear-gradient(135deg,#FF5C7A,#FFA24C)", color: "#15101B" } : {}}
+      >
+        <Music size={16} color={licensedAudio ? "#15101B" : "var(--muted)"} />
+        Licensed audio <span style={{ opacity: 0.7, fontWeight: 400 }}>· may trip Content ID on TikTok/YouTube</span>
+        <span className="rc-switch"><span className="rc-knob" /></span>
+      </button>
 
       <label className="rc-label">Post this clip to</label>
       {PK.map((k) => (

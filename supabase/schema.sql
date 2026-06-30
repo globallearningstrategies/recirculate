@@ -19,8 +19,25 @@ create table if not exists clips (
   caption text default '',
   hashtags text default '',
   video_path text,                 -- path inside the storage bucket, e.g. "<uid>/lev-tahor-chorus.mp4"
+  external_id text,                -- source media id (e.g. Instagram media id); null for manual adds
+  source text,                     -- 'instagram' | null (manual)
+  status text,                     -- 'imported' | null
+  posted_at timestamptz,           -- original platform timestamp (IG reel created time)
+  licensed_audio boolean not null default false, -- IG licensed-music: audio baked in, may trip Content ID
   created_at timestamptz default now()
 );
+
+-- Backfill columns on pre-existing deployments.
+alter table clips add column if not exists external_id    text;
+alter table clips add column if not exists source         text;
+alter table clips add column if not exists status         text;
+alter table clips add column if not exists posted_at      timestamptz;
+alter table clips add column if not exists licensed_audio boolean not null default false;
+
+-- Idempotency for imports: one clip per (owner, external id). Partial so manual clips are unaffected.
+create unique index if not exists clips_user_external_idx
+  on clips (user_id, external_id)
+  where external_id is not null;
 
 create table if not exists clip_platforms (
   clip_id uuid references clips(id) on delete cascade,
@@ -64,6 +81,21 @@ create table if not exists post_log (
   error text
 );
 
+-- Per-user platform connection used by the Instagram importer (and forward-compatible
+-- with Phase 2 OAuth, which will write the same row). The importer reads access_token
+-- server-side via the service role; for now the owner inserts a long-lived token by hand.
+create table if not exists social_connections (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  platform text not null check (platform in ('instagram','youtube','tiktok')),
+  external_user_id text,
+  username text,
+  access_token text,
+  token_expires_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  primary key (user_id, platform)
+);
+
 -- Older deployments may predate user_id; add it idempotently.
 alter table clips             add column if not exists user_id uuid default auth.uid();
 alter table settings          add column if not exists user_id uuid default auth.uid();
@@ -74,11 +106,12 @@ alter table post_log          add column if not exists user_id uuid default auth
 -- Row Level Security
 -- ---------------------------------------------------------------------------
 
-alter table clips             enable row level security;
-alter table clip_platforms    enable row level security;
-alter table settings          enable row level security;
-alter table platform_accounts enable row level security;
-alter table post_log          enable row level security;
+alter table clips              enable row level security;
+alter table clip_platforms     enable row level security;
+alter table settings           enable row level security;
+alter table platform_accounts  enable row level security;
+alter table post_log           enable row level security;
+alter table social_connections enable row level security;
 
 -- A row is readable and writable only by its owner.
 drop policy if exists "own clips" on clips;
@@ -95,6 +128,10 @@ create policy "own platform_accounts" on platform_accounts for all
 
 drop policy if exists "own post_log" on post_log;
 create policy "own post_log" on post_log for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "own social_connections" on social_connections;
+create policy "own social_connections" on social_connections for all
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- clip_platforms has no user_id of its own; ownership flows through its clip.

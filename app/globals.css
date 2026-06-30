@@ -60,6 +60,9 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
 .rc-badges{display:flex;gap:5px}
 .rc-badge{width:23px;height:23px;border-radius:7px;display:flex;align-items:center;justify-content:center;background:var(--surface2)}
 .rc-meta{font-size:11.5px;color:var(--muted);margin:7px 0 0}
+.rc-tag-chip{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:999px;
+  background:var(--surface2);border:1px solid var(--line);color:var(--lilac);white-space:nowrap}
+.rc-tag-chip.warn{color:#FFC9A4;border-color:rgba(255,162,76,.4);background:rgba(255,162,76,.10)}
 .rc-thumb{width:46px;height:46px;border-radius:10px;object-fit:cover;background:var(--surface2);flex:0 0 auto}
 .rc-icbtn{border:none;background:transparent;color:var(--muted);cursor:pointer;padding:5px;border-radius:8px}
 .rc-icbtn:hover{color:var(--text);background:var(--surface2)}
