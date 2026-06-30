@@ -288,8 +288,7 @@ export default function RecirculateApp({ email }: { email: string }) {
             <div className="rc-title">{upNext.title}</div>
             {upNext.video_path && (
               <video
-                className="rc-thumb"
-                style={{ width: "100%", height: "auto", maxHeight: 260, borderRadius: 14, marginBottom: 10 }}
+                style={{ display: "block", margin: "0 auto 10px", width: "auto", height: "auto", maxWidth: "100%", maxHeight: 360, borderRadius: 14, background: "#000" }}
                 src={publicUrl(upNext.video_path)}
                 controls
                 playsInline
@@ -482,7 +481,7 @@ function ReelForm({
       <label className="rc-label">Video</label>
       <div className="rc-file">
         {videoPath && !file && (
-          <video src={publicUrl(videoPath)} className="rc-thumb" style={{ width: "100%", height: "auto", maxHeight: 200, borderRadius: 12, marginBottom: 6 }} controls playsInline preload="metadata" />
+          <video src={publicUrl(videoPath)} style={{ display: "block", margin: "0 auto 6px", width: "auto", height: "auto", maxWidth: "100%", maxHeight: 320, borderRadius: 12, background: "#000" }} controls playsInline preload="metadata" />
         )}
         <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         {file && <div style={{ marginTop: 6 }}>Selected: {file.name}</div>}
