@@ -12,8 +12,10 @@ export const maxDuration = 60;
 const PLATFORMS = ["youtube", "instagram", "tiktok"] as const;
 
 export async function GET(req: Request) {
-  // Vercel Cron sends the CRON_SECRET as a bearer token. Reject anything else.
-  if (req.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Vercel Cron sends the CRON_SECRET as a bearer token. Fail closed when the
+  // secret isn't configured — otherwise "Bearer undefined" would match.
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

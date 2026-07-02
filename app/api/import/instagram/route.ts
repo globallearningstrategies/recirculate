@@ -1,12 +1,33 @@
 import { NextResponse } from "next/server";
 import { db, BUCKET } from "@/lib/supabase";
 import { createSupabaseServer } from "@/lib/supabase-server";
-import { listReels, parseCaption, deriveTitle, downloadVideo } from "@/lib/instagram";
+import { listReels, parseCaption, deriveTitle, downloadVideo, downloadBytes, type IGMedia } from "@/lib/instagram";
+import { getInstagramToken } from "@/lib/connections";
 
 // Downloads run inline (CDN bytes), so give the import room to work through a
 // back-catalog without timing out.
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+// Best-effort thumbnail: grabs the reel's cover image and stores it next to the
+// video. Returns the storage path, or null if anything goes wrong (a clip
+// without a thumb just falls back to the video element in the UI).
+async function storeThumb(userId: string, reel: IGMedia): Promise<string | null> {
+  if (!reel.thumbnail_url) return null;
+  try {
+    const { bytes, contentType } = await downloadBytes(reel.thumbnail_url, "image/jpeg");
+    const path = `${userId}/thumbs/ig_${reel.id}.jpg`;
+    const up = await db.storage.from(BUCKET).upload(path, Buffer.from(bytes), {
+      contentType,
+      cacheControl: "31536000",
+      upsert: true,
+    });
+    if (up.error) return null;
+    return path;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST() {
   // 1) Authenticate the request as the owner (RLS-bound session client), then do
@@ -30,31 +51,18 @@ export async function POST() {
     );
   }
 
-  // 2) Read the Instagram connection (token lives per-user, not in env).
-  const { data: conn } = await db
-    .from("social_connections")
-    .select("access_token, token_expires_at, username")
-    .eq("user_id", userId)
-    .eq("platform", "instagram")
-    .maybeSingle();
-
-  if (!conn?.access_token) {
-    return NextResponse.json(
-      { error: "Connect Instagram first — no instagram row in social_connections." },
-      { status: 400 }
-    );
-  }
-  if (conn.token_expires_at && new Date(conn.token_expires_at).getTime() < Date.now()) {
-    return NextResponse.json(
-      { error: "Your Instagram token has expired. Re-insert a fresh long-lived token." },
-      { status: 400 }
-    );
-  }
-
-  // 3) Pull the reel list and the set of already-imported ids (dedupe).
-  let reels;
+  // 2) Get a valid token (auto-refreshes the long-lived token when due).
+  let token: string;
   try {
-    reels = await listReels(conn.access_token);
+    token = await getInstagramToken(userId);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Instagram connection error." }, { status: 400 });
+  }
+
+  // 3) Pull the reel list and what we already have (dedupe + thumb backfill).
+  let reels: IGMedia[];
+  try {
+    reels = await listReels(token);
   } catch (e: any) {
     return NextResponse.json(
       { error: `Instagram API error: ${e?.message || "unknown"}` },
@@ -64,25 +72,34 @@ export async function POST() {
 
   const { data: existingRows } = await db
     .from("clips")
-    .select("external_id")
+    .select("id, external_id, thumb_path")
     .eq("user_id", userId)
     .not("external_id", "is", null);
-  const seen = new Set((existingRows ?? []).map((r) => r.external_id as string));
+  const existing = new Map((existingRows ?? []).map((r) => [r.external_id as string, r]));
 
   let added = 0;
   let skipped = 0;
+  let thumbed = 0;
   const errors: { id: string; error: string }[] = [];
 
-  // 4) Per reel: skip if known, else download bytes NOW (signed URL expires fast),
-  //    upload to the same bucket, and create a normal clip with toggles off.
+  // 4) Per reel: skip if known (backfilling its thumbnail if missing), else
+  //    download bytes NOW (signed URLs expire fast), upload to the same bucket,
+  //    and create a normal clip with platform toggles off.
   for (const reel of reels) {
-    if (seen.has(reel.id)) {
+    const known = existing.get(reel.id);
+    if (known) {
       skipped++;
+      if (!known.thumb_path) {
+        const thumbPath = await storeThumb(userId, reel);
+        if (thumbPath) {
+          await db.from("clips").update({ thumb_path: thumbPath }).eq("id", known.id);
+          thumbed++;
+        }
+      }
       continue;
     }
     if (!reel.media_url) {
       errors.push({ id: reel.id, error: "no media_url" });
-      skipped++;
       continue;
     }
 
@@ -96,6 +113,7 @@ export async function POST() {
       });
       if (up.error) throw new Error(up.error.message);
 
+      const thumbPath = await storeThumb(userId, reel);
       const { caption, hashtags } = parseCaption(reel.caption);
       const insert = await db.from("clips").insert({
         user_id: userId,
@@ -103,6 +121,7 @@ export async function POST() {
         caption,
         hashtags,
         video_path: path,
+        thumb_path: thumbPath,
         source: "instagram",
         external_id: reel.id,
         status: "imported",
@@ -112,23 +131,17 @@ export async function POST() {
 
       if (insert.error) {
         // Unique index lost a race (already imported): clean up the orphan upload.
-        await db.storage.from(BUCKET).remove([path]);
-        if (insert.error.code === "23505") {
-          skipped++;
-        } else {
-          errors.push({ id: reel.id, error: insert.error.message });
-          skipped++;
-        }
+        await db.storage.from(BUCKET).remove([path, ...(thumbPath ? [thumbPath] : [])]);
+        if (insert.error.code === "23505") skipped++;
+        else errors.push({ id: reel.id, error: insert.error.message });
         continue;
       }
 
-      seen.add(reel.id);
       added++;
     } catch (e: any) {
       errors.push({ id: reel.id, error: e?.message || "import failed" });
-      skipped++;
     }
   }
 
-  return NextResponse.json({ added, skipped, errors });
+  return NextResponse.json({ added, skipped, thumbed, failed: errors.length, errors });
 }

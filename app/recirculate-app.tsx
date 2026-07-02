@@ -13,8 +13,11 @@ type Reel = {
   caption: string;
   hashtags: string;
   video_path: string | null;
+  thumb_path: string | null;
   source: string | null;
   licensed_audio: boolean;
+  posted_at: string | null; // when the original went up on its source platform
+  created_at: string | null;
   links: Record<Platform, string>;
   platforms: Record<Platform, boolean>;
   posted: Record<Platform, string | null>;
@@ -29,6 +32,7 @@ type ReelFormData = {
   platforms: Record<Platform, boolean>;
   links: Record<Platform, string>;
   video_path: string | null;
+  thumb_path: string | null;
   licensed_audio: boolean;
 };
 
@@ -36,6 +40,7 @@ const DEFAULT_CADENCE: Cadence = { instagram: 5, tiktok: 4, youtube: 7 };
 const todayISO = () => new Date().toISOString();
 const daysBetween = (a: string, b: string) => Math.floor((+new Date(b) - +new Date(a)) / 86400000);
 const fmt = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const fmtMonthYear = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", year: "numeric" });
 const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, youtube: v });
 
 export default function RecirculateApp({ email }: { email: string }) {
@@ -62,7 +67,7 @@ export default function RecirculateApp({ email }: { email: string }) {
     const [{ data: clipRows }, { data: settingRows }] = await Promise.all([
       supabase
         .from("clips")
-        .select("id,title,caption,hashtags,video_path,source,licensed_audio,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
+        .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,posted_at,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
         .order("created_at", { ascending: true }),
       supabase.from("settings").select("platform,cadence_days"),
     ]);
@@ -76,8 +81,11 @@ export default function RecirculateApp({ email }: { email: string }) {
         caption: c.caption ?? "",
         hashtags: c.hashtags ?? "",
         video_path: c.video_path ?? null,
+        thumb_path: c.thumb_path ?? null,
         source: c.source ?? null,
         licensed_audio: !!c.licensed_audio,
+        posted_at: c.posted_at ?? null,
+        created_at: c.created_at ?? null,
         links: { instagram: byPlat.instagram?.link ?? "", tiktok: byPlat.tiktok?.link ?? "", youtube: byPlat.youtube?.link ?? "" },
         platforms: {
           instagram: !!byPlat.instagram?.enabled,
@@ -109,13 +117,25 @@ export default function RecirculateApp({ email }: { email: string }) {
     load();
   }, [load]);
 
+  // A "Published to Instagram 🎉" banner has no business on the TikTok tab.
+  useEffect(() => {
+    setPostMsg(null);
+  }, [plat]);
+
   const acc = PLATFORMS[plat];
 
-  // ---- rotation rule (kept identical to reference/recirculate-ui.jsx) ----
+  // ---- rotation rule (kept identical to reference/recirculate-ui.jsx):
+  // never-posted first, then oldest last_posted_at. The reference left the
+  // never-posted order unspecified; we tie-break by original post date so the
+  // content people haven't seen the longest recirculates first. ----
   const inRot = reels.filter((r) => r.platforms[plat]);
   const ordered = [...inRot].sort((a, b) => {
     const x = a.posted[plat], y = b.posted[plat];
-    if (!x && !y) return 0;
+    if (!x && !y) {
+      const ax = a.posted_at ?? a.created_at ?? "";
+      const bx = b.posted_at ?? b.created_at ?? "";
+      return ax < bx ? -1 : ax > bx ? 1 : 0;
+    }
     if (!x) return -1;
     if (!y) return 1;
     return +new Date(x) - +new Date(y);
@@ -159,9 +179,13 @@ export default function RecirculateApp({ email }: { email: string }) {
     await supabase.from("post_log").insert({ clip_id: reel.id, platform: plat, status: "success" });
   };
 
-  const remove = async (id: string) => {
-    setReels((rs) => rs.filter((r) => r.id !== id));
-    await supabase.from("clips").delete().eq("id", id); // cascades clip_platforms
+  const remove = async (reel: Reel) => {
+    if (!window.confirm(`Delete "${reel.title}" and its video? This can't be undone.`)) return;
+    setReels((rs) => rs.filter((r) => r.id !== reel.id));
+    await supabase.from("clips").delete().eq("id", reel.id); // cascades clip_platforms
+    // Clean up the stored files too, or the bucket fills with orphans.
+    const paths = [reel.video_path, reel.thumb_path].filter(Boolean) as string[];
+    if (paths.length) await supabase.storage.from("clips").remove(paths).catch(() => {});
   };
 
   // Real publish: posts the clip to the selected platform, then advances the
@@ -202,9 +226,11 @@ export default function RecirculateApp({ email }: { email: string }) {
       if (!res.ok) {
         setImportMsg({ ok: false, text: body?.error || "Import failed." });
       } else {
-        const { added, skipped, errors } = body as { added: number; skipped: number; errors?: any[] };
-        const extra = errors?.length ? ` · ${errors.length} error${errors.length === 1 ? "" : "s"}` : "";
-        setImportMsg({ ok: true, text: `Imported ${added} new · skipped ${skipped} already in library${extra}.` });
+        const { added, skipped, thumbed, failed } = body as { added: number; skipped: number; thumbed?: number; failed?: number };
+        const bits = [`Imported ${added} new`, `skipped ${skipped} already in library`];
+        if (thumbed) bits.push(`added ${thumbed} thumbnail${thumbed === 1 ? "" : "s"}`);
+        if (failed) bits.push(`${failed} failed`);
+        setImportMsg({ ok: true, text: bits.join(" · ") + "." });
         await load();
       }
     } catch (e: any) {
@@ -227,12 +253,12 @@ export default function RecirculateApp({ email }: { email: string }) {
     if (clipId) {
       await supabase
         .from("clips")
-        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, licensed_audio: data.licensed_audio })
+        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio })
         .eq("id", clipId);
     } else {
       const { data: inserted, error } = await supabase
         .from("clips")
-        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, licensed_audio: data.licensed_audio })
+        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio })
         .select("id")
         .single();
       if (error || !inserted) return;
@@ -318,11 +344,13 @@ export default function RecirculateApp({ email }: { email: string }) {
             <div className="rc-title">{upNext.title}</div>
             {upNext.video_path && (
               <video
+                key={upNext.id}
                 style={{ display: "block", margin: "0 auto 10px", width: "auto", height: "auto", maxWidth: "100%", maxHeight: 360, borderRadius: 14, background: "#000" }}
                 src={publicUrl(upNext.video_path)}
+                poster={upNext.thumb_path ? publicUrl(upNext.thumb_path) : undefined}
                 controls
                 playsInline
-                preload="metadata"
+                preload={upNext.thumb_path ? "none" : "metadata"}
               />
             )}
             {upNext.caption && <div className="rc-cap">{upNext.caption}</div>}
@@ -398,7 +426,11 @@ export default function RecirculateApp({ email }: { email: string }) {
             <ReelForm key={r.id} reel={r} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />
           ) : (
             <div key={r.id} className={"rc-card" + (upNext && r.id === upNext.id ? " upnext" : "")}>
-              {r.video_path && <video className="rc-thumb" src={publicUrl(r.video_path)} muted playsInline preload="metadata" />}
+              {r.thumb_path ? (
+                <img className="rc-thumb" src={publicUrl(r.thumb_path)} alt="" loading="lazy" />
+              ) : (
+                r.video_path && <video className="rc-thumb" src={publicUrl(r.video_path)} muted playsInline preload="none" />
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p className="rc-cardtitle">{r.title}</p>
                 <div className="rc-badges">
@@ -418,6 +450,7 @@ export default function RecirculateApp({ email }: { email: string }) {
                       ? `${acc.name}: last posted ${fmt(r.posted[plat]!)} · ${r.timesPosted[plat] || 0}×`
                       : `${acc.name}: never posted`
                     : `Not in ${acc.name} rotation`}
+                  {r.posted_at ? ` · original ${fmtMonthYear(r.posted_at)}` : ""}
                 </p>
                 {(r.source === "instagram" || r.licensed_audio) && (
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -448,7 +481,7 @@ export default function RecirculateApp({ email }: { email: string }) {
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
               </button>
-              <button className="rc-icbtn" onClick={() => remove(r.id)} aria-label="Delete">
+              <button className="rc-icbtn" onClick={() => remove(r)} aria-label="Delete">
                 <Trash2 size={15} />
               </button>
             </div>
@@ -491,6 +524,7 @@ function ReelForm({
     setErr("");
     try {
       let path = videoPath;
+      let thumb = reel?.thumb_path ?? null;
       if (file) {
         const { data: u } = await supabase.auth.getUser();
         const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -505,9 +539,14 @@ function ReelForm({
           setBusy(false);
           return;
         }
+        // Replacing the video: the old file (and its now-stale thumbnail)
+        // would otherwise be orphaned in the bucket forever.
+        const stale = [reel?.video_path, reel?.thumb_path].filter(Boolean) as string[];
+        if (stale.length) await supabase.storage.from("clips").remove(stale).catch(() => {});
         path = key;
+        thumb = null;
       }
-      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path, licensed_audio: licensedAudio });
+      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path, thumb_path: thumb, licensed_audio: licensedAudio });
     } finally {
       setBusy(false);
     }
@@ -527,7 +566,14 @@ function ReelForm({
       <label className="rc-label">Video</label>
       <div className="rc-file">
         {videoPath && !file && (
-          <video src={publicUrl(videoPath)} style={{ display: "block", margin: "0 auto 6px", width: "auto", height: "auto", maxWidth: "100%", maxHeight: 320, borderRadius: 12, background: "#000" }} controls playsInline preload="metadata" />
+          <video
+            src={publicUrl(videoPath)}
+            poster={reel?.thumb_path ? publicUrl(reel.thumb_path) : undefined}
+            style={{ display: "block", margin: "0 auto 6px", width: "auto", height: "auto", maxWidth: "100%", maxHeight: 320, borderRadius: 12, background: "#000" }}
+            controls
+            playsInline
+            preload={reel?.thumb_path ? "none" : "metadata"}
+          />
         )}
         <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         {file && <div style={{ marginTop: 6 }}>Selected: {file.name}</div>}

@@ -19,6 +19,7 @@ create table if not exists clips (
   caption text default '',
   hashtags text default '',
   video_path text,                 -- path inside the storage bucket, e.g. "<uid>/lev-tahor-chorus.mp4"
+  thumb_path text,                 -- cover image for library cards / video posters
   external_id text,                -- source media id (e.g. Instagram media id); null for manual adds
   source text,                     -- 'instagram' | null (manual)
   status text,                     -- 'imported' | null
@@ -28,6 +29,7 @@ create table if not exists clips (
 );
 
 -- Backfill columns on pre-existing deployments.
+alter table clips add column if not exists thumb_path     text;
 alter table clips add column if not exists external_id    text;
 alter table clips add column if not exists source         text;
 alter table clips add column if not exists status         text;
@@ -166,18 +168,24 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.seed_owner_settings();
 
+-- Only the auth trigger should run this — not the public RPC surface.
+revoke execute on function public.seed_owner_settings() from public, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- Storage: public "clips" bucket for video files
 -- ---------------------------------------------------------------------------
--- Public read so Instagram/TikTok servers (Phase 2/3) can fetch the video by URL.
--- Writes are limited to authenticated users (only the owner ever authenticates).
+-- The bucket is public so Instagram/TikTok servers can fetch videos by URL —
+-- public-bucket object URLs don't consult RLS, so no anon SELECT policy is
+-- needed (and a broad one would let anyone LIST the bucket). Reads/writes via
+-- the API are limited to authenticated users (only the owner ever authenticates).
 
 insert into storage.buckets (id, name, public)
 values ('clips', 'clips', true)
 on conflict (id) do update set public = true;
 
 drop policy if exists "clips public read" on storage.objects;
-create policy "clips public read" on storage.objects for select
+drop policy if exists "clips authenticated read" on storage.objects;
+create policy "clips authenticated read" on storage.objects for select to authenticated
   using (bucket_id = 'clips');
 
 drop policy if exists "clips owner insert" on storage.objects;

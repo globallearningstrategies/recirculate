@@ -87,10 +87,37 @@ export function deriveTitle(caption: string): string {
 export async function downloadVideo(
   mediaUrl: string
 ): Promise<{ bytes: ArrayBuffer; contentType: string }> {
-  const res = await fetch(mediaUrl);
-  if (!res.ok) throw new Error(`Could not download reel video: ${res.status}`);
-  const contentType = res.headers.get("content-type") || "video/mp4";
+  return downloadBytes(mediaUrl, "video/mp4");
+}
+
+// Same, for any CDN asset (e.g. a reel's thumbnail image).
+export async function downloadBytes(
+  url: string,
+  fallbackType: string
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not download media: ${res.status}`);
+  const contentType = res.headers.get("content-type") || fallbackType;
   return { bytes: await res.arrayBuffer(), contentType };
+}
+
+// Extends a long-lived Instagram-Login token for another ~60 days. Instagram
+// only refreshes tokens that are at least 24h old and not yet expired.
+// Returns null on failure so callers can fall back to the existing token.
+export async function refreshLongLivedToken(
+  accessToken: string
+): Promise<{ access_token: string; expires_in: number } | null> {
+  try {
+    const u = new URL(`${GRAPH}/refresh_access_token`);
+    u.searchParams.set("grant_type", "ig_refresh_token");
+    u.searchParams.set("access_token", accessToken);
+    const res = await fetch(u);
+    const body: any = await res.json();
+    if (!res.ok || !body?.access_token) return null;
+    return { access_token: body.access_token, expires_in: body.expires_in ?? 60 * 86400 };
+  } catch {
+    return null;
+  }
 }
 
 // Publishes a reel to the connected account. Three steps, per the Instagram API:

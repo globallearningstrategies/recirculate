@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db, BUCKET } from "@/lib/supabase";
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { publishReel } from "@/lib/instagram";
+import { getInstagramToken } from "@/lib/connections";
 
 // Reels need a processing pass on Instagram's side, so allow time.
 export const runtime = "nodejs";
@@ -57,18 +58,12 @@ export async function POST(req: Request, { params }: { params: { platform: strin
     return NextResponse.json({ error: "This clip has no video to post." }, { status: 400 });
   }
 
-  // Read the connection token.
-  const { data: conn } = await db
-    .from("social_connections")
-    .select("access_token, token_expires_at")
-    .eq("user_id", userId)
-    .eq("platform", "instagram")
-    .maybeSingle();
-  if (!conn?.access_token) {
-    return NextResponse.json({ error: "Connect Instagram first." }, { status: 400 });
-  }
-  if (conn.token_expires_at && new Date(conn.token_expires_at).getTime() < Date.now()) {
-    return NextResponse.json({ error: "Your Instagram token has expired. Re-insert a fresh token." }, { status: 400 });
+  // Get a valid token (auto-refreshes the long-lived token when due).
+  let token: string;
+  try {
+    token = await getInstagramToken(userId);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Instagram connection error." }, { status: 400 });
   }
 
   const caption = [clip.caption, clip.hashtags].filter(Boolean).join("\n\n");
@@ -77,7 +72,7 @@ export async function POST(req: Request, { params }: { params: { platform: strin
   // Publish.
   let externalId: string;
   try {
-    externalId = await publishReel(conn.access_token, videoUrl, caption);
+    externalId = await publishReel(token, videoUrl, caption);
   } catch (e: any) {
     await db
       .from("post_log")
