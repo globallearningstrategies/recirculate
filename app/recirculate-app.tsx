@@ -44,7 +44,13 @@ const fmt = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 const fmtMonthYear = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", year: "numeric" });
 const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, youtube: v });
 
-export default function RecirculateApp({ email }: { email: string }) {
+export default function RecirculateApp({
+  email,
+  notice,
+}: {
+  email: string;
+  notice?: { ok: boolean; text: string } | null;
+}) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [reels, setReels] = useState<Reel[]>([]);
@@ -58,6 +64,8 @@ export default function RecirculateApp({ email }: { email: string }) {
   const [posting, setPosting] = useState<string | null>(null);
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  // platform → username (null = connected but no display name); key absent = not connected
+  const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
   const publicUrl = useCallback(
     (path: string) => supabase.storage.from("clips").getPublicUrl(path).data.publicUrl,
@@ -66,12 +74,13 @@ export default function RecirculateApp({ email }: { email: string }) {
 
   // ---- load ----
   const load = useCallback(async () => {
-    const [{ data: clipRows }, { data: settingRows }] = await Promise.all([
+    const [{ data: clipRows }, { data: settingRows }, { data: connRows }] = await Promise.all([
       supabase
         .from("clips")
         .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
         .order("created_at", { ascending: true }),
       supabase.from("settings").select("platform,cadence_days"),
+      supabase.from("social_connections").select("platform,username"),
     ]);
 
     const mapped: Reel[] = (clipRows ?? []).map((c: any) => {
@@ -111,8 +120,12 @@ export default function RecirculateApp({ email }: { email: string }) {
     const cad: Cadence = { ...DEFAULT_CADENCE };
     for (const s of settingRows ?? []) if (s.platform in cad) cad[s.platform as Platform] = s.cadence_days;
 
+    const c: Partial<Record<Platform, string | null>> = {};
+    for (const row of connRows ?? []) c[row.platform as Platform] = row.username ?? null;
+
     setReels(mapped);
     setCadence(cad);
+    setConns(c);
     setLoaded(true);
   }, [supabase]);
 
@@ -205,7 +218,11 @@ export default function RecirculateApp({ email }: { email: string }) {
   const publishClip = async (clip: Reel) => {
     if (posting) return;
     const name = PLATFORMS[plat].name;
-    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.`)) return;
+    const tiktokNote =
+      plat === "tiktok"
+        ? "\n\nNote: until the TikTok app passes their audit, posts land as PRIVATE (only you can see them)."
+        : "";
+    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${tiktokNote}`)) return;
     setPosting(clip.id);
     setPostMsg(null);
     try {
@@ -331,6 +348,30 @@ export default function RecirculateApp({ email }: { email: string }) {
               <small>{PLATFORMS[k].sub}</small>
             </button>
           ))}
+        </div>
+
+        {notice && (
+          <div className={"rc-msg " + (notice.ok ? "ok" : "err")} style={{ margin: "0 0 12px" }}>
+            {notice.text}
+          </div>
+        )}
+
+        <div className="rc-deck" style={{ padding: "0 2px 12px" }}>
+          {PK.map((k) =>
+            k in conns ? (
+              <div key={k} className="rc-chip" title={`${PLATFORMS[k].name} connected`}>
+                <Icon p={k} size={12} color={PLATFORMS[k].a} /> <b>{conns[k] || "Connected"}</b> ✓
+              </div>
+            ) : k === "instagram" ? (
+              <div key={k} className="rc-chip" title="Instagram connects via a pasted token — see setup">
+                <Icon p={k} size={12} color="var(--muted)" /> Not connected
+              </div>
+            ) : (
+              <a key={k} className="rc-chip" href={`/api/connect/${k}`} style={{ color: "var(--text)", textDecoration: "none" }}>
+                <Icon p={k} size={12} color={PLATFORMS[k].a} /> Connect {PLATFORMS[k].name}
+              </a>
+            )
+          )}
         </div>
 
         <div className="rc-cadence">

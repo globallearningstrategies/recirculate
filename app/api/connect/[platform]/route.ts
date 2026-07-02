@@ -1,41 +1,76 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { randomBytes } from "node:crypto";
+import { createSupabaseServer } from "@/lib/supabase-server";
+import { originFrom } from "@/lib/origin";
 
-// One-time connect flow. Visit /api/connect/youtube (or instagram / tiktok) in a browser,
-// approve access, and the matching callback stores the tokens. Protect these routes (or remove
-// them after connecting) so only you can run them.
-export async function GET(_req: Request, { params }: { params: { platform: string } }) {
-  const p = params.platform;
-  const V = process.env.META_GRAPH_VERSION || "v21.0";
+export const runtime = "nodejs";
 
-  if (p === "youtube") {
-    const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    u.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID!);
-    u.searchParams.set("redirect_uri", process.env.GOOGLE_REDIRECT_URI!);
-    u.searchParams.set("response_type", "code");
-    u.searchParams.set("scope", "https://www.googleapis.com/auth/youtube.upload");
-    u.searchParams.set("access_type", "offline"); // needed for a refresh token
-    u.searchParams.set("prompt", "consent");      // forces a refresh token every time
-    return NextResponse.redirect(u.toString());
+// Starts the OAuth connect flow for a platform. Owner-only: visiting this
+// while signed out bounces to /login. The matching /api/callback route
+// finishes the dance and stores tokens in social_connections.
+//
+// Redirect URIs are derived from the request origin (APP_BASE_URL overrides),
+// so the SAME URL must be registered in the provider's dev portal:
+//   https://<app>/api/callback/youtube   (Google Cloud OAuth client)
+//   https://<app>/api/callback/tiktok    (TikTok for Developers)
+export async function GET(req: NextRequest, { params }: { params: { platform: string } }) {
+  const platform = params.platform;
+  const origin = originFrom(req);
+
+  const ssr = await createSupabaseServer();
+  const {
+    data: { user },
+  } = await ssr.auth.getUser();
+  const owner = process.env.OWNER_EMAIL?.toLowerCase();
+  if (!user || (owner && user.email?.toLowerCase() !== owner)) {
+    return NextResponse.redirect(`${origin}/login`);
   }
 
-  if (p === "instagram") {
-    const u = new URL(`https://www.facebook.com/${V}/dialog/oauth`);
-    u.searchParams.set("client_id", process.env.META_APP_ID!);
-    u.searchParams.set("redirect_uri", process.env.META_REDIRECT_URI!);
-    u.searchParams.set("response_type", "code");
-    u.searchParams.set("scope", "instagram_basic,instagram_content_publish,pages_show_list,business_management");
-    return NextResponse.redirect(u.toString());
+  const redirectUri = `${origin}/api/callback/${platform}`;
+  const state = randomBytes(16).toString("hex");
+
+  let authUrl: URL;
+  if (platform === "youtube") {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return NextResponse.redirect(
+        `${origin}/?connect_error=${encodeURIComponent("Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel first.")}`
+      );
+    }
+    authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID);
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set(
+      "scope",
+      "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
+    );
+    authUrl.searchParams.set("access_type", "offline"); // needed for a refresh token
+    authUrl.searchParams.set("prompt", "consent");      // forces a refresh token every time
+    authUrl.searchParams.set("state", state);
+  } else if (platform === "tiktok") {
+    if (!process.env.TIKTOK_CLIENT_KEY || !process.env.TIKTOK_CLIENT_SECRET) {
+      return NextResponse.redirect(
+        `${origin}/?connect_error=${encodeURIComponent("Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET in Vercel first.")}`
+      );
+    }
+    authUrl = new URL("https://www.tiktok.com/v2/auth/authorize/");
+    authUrl.searchParams.set("client_key", process.env.TIKTOK_CLIENT_KEY);
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", "user.info.basic,video.publish");
+    authUrl.searchParams.set("state", state);
+  } else {
+    return NextResponse.json({ error: "unknown platform" }, { status: 400 });
   }
 
-  if (p === "tiktok") {
-    const u = new URL("https://www.tiktok.com/v2/auth/authorize/");
-    u.searchParams.set("client_key", process.env.TIKTOK_CLIENT_KEY!);
-    u.searchParams.set("redirect_uri", process.env.TIKTOK_REDIRECT_URI!);
-    u.searchParams.set("response_type", "code");
-    u.searchParams.set("scope", "video.publish");
-    u.searchParams.set("state", "recirculate");
-    return NextResponse.redirect(u.toString());
-  }
-
-  return NextResponse.json({ error: "unknown platform" }, { status: 400 });
+  const res = NextResponse.redirect(authUrl.toString());
+  // CSRF: the callback must present the same state we hand out here.
+  res.cookies.set(`oauth_state_${platform}`, state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    maxAge: 600,
+    path: "/",
+  });
+  return res;
 }

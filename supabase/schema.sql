@@ -94,11 +94,14 @@ create table if not exists social_connections (
   external_user_id text,
   username text,
   access_token text,
+  refresh_token text,                -- YouTube/TikTok only; TikTok rotates it on every refresh
   token_expires_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   primary key (user_id, platform)
 );
+
+alter table social_connections add column if not exists refresh_token text;
 
 -- Older deployments may predate user_id; add it idempotently.
 alter table clips             add column if not exists user_id uuid default auth.uid();

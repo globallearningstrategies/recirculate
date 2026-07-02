@@ -1,84 +1,129 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/supabase";
+import { createSupabaseServer } from "@/lib/supabase-server";
+import { originFrom } from "@/lib/origin";
 
-const V = process.env.META_GRAPH_VERSION || "v21.0";
+export const runtime = "nodejs";
 
-async function save(platform: string, fields: any) {
-  await db.from("platform_accounts").upsert({ platform, ...fields, updated_at: new Date().toISOString() });
-}
+// Finishes the OAuth connect flow started by /api/connect/[platform]:
+// verifies the CSRF state, exchanges the code for tokens, fetches the account
+// identity for display, and upserts the owner's social_connections row.
+export async function GET(req: NextRequest, { params }: { params: { platform: string } }) {
+  const platform = params.platform;
+  const origin = originFrom(req);
+  const fail = (msg: string) =>
+    NextResponse.redirect(`${origin}/?connect_error=${encodeURIComponent(msg)}`);
 
-export async function GET(req: Request, { params }: { params: { platform: string } }) {
-  const code = new URL(req.url).searchParams.get("code");
-  if (!code) return NextResponse.json({ error: "no code" }, { status: 400 });
-  const p = params.platform;
+  const ssr = await createSupabaseServer();
+  const {
+    data: { user },
+  } = await ssr.auth.getUser();
+  const owner = process.env.OWNER_EMAIL?.toLowerCase();
+  if (!user || (owner && user.email?.toLowerCase() !== owner)) {
+    return NextResponse.redirect(`${origin}/login`);
+  }
+
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const cookieState = req.cookies.get(`oauth_state_${platform}`)?.value;
+  if (!code) {
+    const err = url.searchParams.get("error_description") || url.searchParams.get("error") || "no code returned";
+    return fail(`${platform} connect was cancelled or failed: ${err}`);
+  }
+  if (!state || !cookieState || state !== cookieState) {
+    return fail("Security check failed (state mismatch) — start the connect again.");
+  }
+
+  const redirectUri = `${origin}/api/callback/${platform}`;
 
   try {
-    if (p === "youtube") {
-      const tok = await fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          code,
-          client_id: process.env.GOOGLE_CLIENT_ID!,
-          client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-          redirect_uri: process.env.GOOGLE_REDIRECT_URI!,
-          grant_type: "authorization_code",
-        }),
-      }).then((r) => r.json());
-      const chan = await fetch("https://www.googleapis.com/youtube/v3/channels?part=id&mine=true", {
-        headers: { Authorization: `Bearer ${tok.access_token}` },
-      }).then((r) => r.json());
-      await save("youtube", {
-        external_id: chan.items?.[0]?.id || null,
+    let row: {
+      external_user_id: string | null;
+      username: string | null;
+      access_token: string;
+      refresh_token: string | null;
+      token_expires_at: string;
+    };
+
+    if (platform === "youtube") {
+      const tok = await (
+        await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            code,
+            client_id: process.env.GOOGLE_CLIENT_ID!,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            redirect_uri: redirectUri,
+            grant_type: "authorization_code",
+          }),
+        })
+      ).json();
+      if (!tok.access_token) throw new Error("Google token exchange failed: " + JSON.stringify(tok));
+      if (!tok.refresh_token) throw new Error("Google returned no refresh token — remove the app's access at myaccount.google.com/permissions and connect again.");
+
+      const chan = await (
+        await fetch("https://www.googleapis.com/youtube/v3/channels?part=id,snippet&mine=true", {
+          headers: { Authorization: `Bearer ${tok.access_token}` },
+        })
+      ).json();
+      const channel = chan.items?.[0];
+
+      row = {
+        external_user_id: channel?.id ?? null,
+        username: channel?.snippet?.title ?? null,
         access_token: tok.access_token,
         refresh_token: tok.refresh_token,
-        expires_at: new Date(Date.now() + tok.expires_in * 1000).toISOString(),
-      });
-    } else if (p === "instagram") {
-      const short = await fetch(
-        `https://graph.facebook.com/${V}/oauth/access_token?client_id=${process.env.META_APP_ID}` +
-          `&redirect_uri=${encodeURIComponent(process.env.META_REDIRECT_URI!)}` +
-          `&client_secret=${process.env.META_APP_SECRET}&code=${code}`
-      ).then((r) => r.json());
-      const long = await fetch(
-        `https://graph.facebook.com/${V}/oauth/access_token?grant_type=fb_exchange_token` +
-          `&client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}` +
-          `&fb_exchange_token=${short.access_token}`
-      ).then((r) => r.json());
-      // Find the IG Business account id behind the user's first Page.
-      const pages = await fetch(
-        `https://graph.facebook.com/${V}/me/accounts?fields=instagram_business_account&access_token=${long.access_token}`
-      ).then((r) => r.json());
-      const igId = pages.data?.find((pg: any) => pg.instagram_business_account)?.instagram_business_account?.id;
-      await save("instagram", {
-        external_id: igId,
-        access_token: long.access_token,
-        refresh_token: null,
-        expires_at: new Date(Date.now() + (long.expires_in || 60 * 86400) * 1000).toISOString(),
-      });
-    } else if (p === "tiktok") {
-      const tok = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_key: process.env.TIKTOK_CLIENT_KEY!,
-          client_secret: process.env.TIKTOK_CLIENT_SECRET!,
-          code,
-          grant_type: "authorization_code",
-          redirect_uri: process.env.TIKTOK_REDIRECT_URI!,
-        }),
-      }).then((r) => r.json());
-      await save("tiktok", {
-        external_id: tok.open_id,
+        token_expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(),
+      };
+    } else if (platform === "tiktok") {
+      const tok = await (
+        await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_key: process.env.TIKTOK_CLIENT_KEY!,
+            client_secret: process.env.TIKTOK_CLIENT_SECRET!,
+            code,
+            grant_type: "authorization_code",
+            redirect_uri: redirectUri,
+          }),
+        })
+      ).json();
+      if (!tok.access_token) throw new Error("TikTok token exchange failed: " + JSON.stringify(tok));
+
+      let displayName: string | null = null;
+      try {
+        const info = await (
+          await fetch("https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", {
+            headers: { Authorization: `Bearer ${tok.access_token}` },
+          })
+        ).json();
+        displayName = info?.data?.user?.display_name ?? null;
+      } catch {}
+
+      row = {
+        external_user_id: tok.open_id ?? null,
+        username: displayName,
         access_token: tok.access_token,
-        refresh_token: tok.refresh_token,
-        expires_at: new Date(Date.now() + tok.expires_in * 1000).toISOString(),
-      });
+        refresh_token: tok.refresh_token ?? null,
+        token_expires_at: new Date(Date.now() + (tok.expires_in ?? 86400) * 1000).toISOString(),
+      };
     } else {
-      return NextResponse.json({ error: "unknown platform" }, { status: 400 });
+      return fail("unknown platform");
     }
-    return NextResponse.json({ connected: p });
+
+    const up = await db.from("social_connections").upsert(
+      { user_id: user.id, platform, ...row, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,platform" }
+    );
+    if (up.error) throw new Error(up.error.message);
+
+    const done = NextResponse.redirect(`${origin}/?connected=${platform}`);
+    done.cookies.set(`oauth_state_${platform}`, "", { maxAge: 0, path: "/" });
+    return done;
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || String(e) }, { status: 500 });
+    return fail(e?.message || `${platform} connect failed`);
   }
 }

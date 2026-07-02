@@ -6,7 +6,11 @@ export const dynamic = "force-dynamic";
 
 // Server-side auth gate. Middleware already redirects unauthenticated visitors,
 // but we re-check here so the page never renders for anyone but the owner.
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams?: { connected?: string; connect_error?: string };
+}) {
   const supabase = await createSupabaseServer();
   const {
     data: { user },
@@ -17,5 +21,12 @@ export default async function Home() {
     redirect("/login");
   }
 
-  return <RecirculateApp email={user.email ?? ""} />;
+  // Result banner from an OAuth connect round-trip (/api/callback/*).
+  const notice = searchParams?.connected
+    ? { ok: true, text: `${searchParams.connected} connected. ✓` }
+    : searchParams?.connect_error
+      ? { ok: false, text: searchParams.connect_error }
+      : null;
+
+  return <RecirculateApp email={user.email ?? ""} notice={notice} />;
 }
