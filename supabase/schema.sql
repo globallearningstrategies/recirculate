@@ -25,6 +25,7 @@ create table if not exists clips (
   status text,                     -- 'imported' | null
   posted_at timestamptz,           -- original platform timestamp (IG reel created time)
   licensed_audio boolean not null default false, -- IG licensed-music: audio baked in, may trip Content ID
+  archived boolean not null default false,       -- kept but out of every rotation and the main library view
   created_at timestamptz default now()
 );
 
@@ -35,6 +36,7 @@ alter table clips add column if not exists source         text;
 alter table clips add column if not exists status         text;
 alter table clips add column if not exists posted_at      timestamptz;
 alter table clips add column if not exists licensed_audio boolean not null default false;
+alter table clips add column if not exists archived       boolean not null default false;
 
 -- Idempotency for imports: one clip per (owner, external id). Partial so manual clips are unaffected.
 create unique index if not exists clips_user_external_idx

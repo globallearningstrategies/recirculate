@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -16,6 +16,7 @@ type Reel = {
   thumb_path: string | null;
   source: string | null;
   licensed_audio: boolean;
+  archived: boolean;
   posted_at: string | null; // when the original went up on its source platform
   created_at: string | null;
   links: Record<Platform, string>;
@@ -56,6 +57,7 @@ export default function RecirculateApp({ email }: { email: string }) {
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [posting, setPosting] = useState<string | null>(null);
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const publicUrl = useCallback(
     (path: string) => supabase.storage.from("clips").getPublicUrl(path).data.publicUrl,
@@ -67,7 +69,7 @@ export default function RecirculateApp({ email }: { email: string }) {
     const [{ data: clipRows }, { data: settingRows }] = await Promise.all([
       supabase
         .from("clips")
-        .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,posted_at,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
+        .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
         .order("created_at", { ascending: true }),
       supabase.from("settings").select("platform,cadence_days"),
     ]);
@@ -84,6 +86,7 @@ export default function RecirculateApp({ email }: { email: string }) {
         thumb_path: c.thumb_path ?? null,
         source: c.source ?? null,
         licensed_audio: !!c.licensed_audio,
+        archived: !!c.archived,
         posted_at: c.posted_at ?? null,
         created_at: c.created_at ?? null,
         links: { instagram: byPlat.instagram?.link ?? "", tiktok: byPlat.tiktok?.link ?? "", youtube: byPlat.youtube?.link ?? "" },
@@ -128,7 +131,9 @@ export default function RecirculateApp({ email }: { email: string }) {
   // never-posted first, then oldest last_posted_at. The reference left the
   // never-posted order unspecified; we tie-break by original post date so the
   // content people haven't seen the longest recirculates first. ----
-  const inRot = reels.filter((r) => r.platforms[plat]);
+  const inRot = reels.filter((r) => !r.archived && r.platforms[plat]);
+  const active = reels.filter((r) => !r.archived);
+  const archived = reels.filter((r) => r.archived);
   const ordered = [...inRot].sort((a, b) => {
     const x = a.posted[plat], y = b.posted[plat];
     if (!x && !y) {
@@ -186,6 +191,13 @@ export default function RecirculateApp({ email }: { email: string }) {
     // Clean up the stored files too, or the bucket fills with orphans.
     const paths = [reel.video_path, reel.thumb_path].filter(Boolean) as string[];
     if (paths.length) await supabase.storage.from("clips").remove(paths).catch(() => {});
+  };
+
+  // Archive: keep the clip and its video, but pull it out of every rotation
+  // and the main library view. Reversible, unlike delete.
+  const setArchived = async (reel: Reel, value: boolean) => {
+    setReels((rs) => rs.map((r) => (r.id === reel.id ? { ...r, archived: value } : r)));
+    await supabase.from("clips").update({ archived: value }).eq("id", reel.id);
   };
 
   // Real publish: posts the clip to the selected platform, then advances the
@@ -399,7 +411,7 @@ export default function RecirculateApp({ email }: { email: string }) {
 
         <div className="rc-libhead">
           <h2>
-            Library {reels.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {reels.length}</span>}
+            Library {active.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {active.length}</span>}
           </h2>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="rc-add" onClick={runImport} disabled={importing} title="Pull your Instagram Reels into the library">
@@ -421,7 +433,7 @@ export default function RecirculateApp({ email }: { email: string }) {
 
         {editing === "new" && <ReelForm onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
 
-        {reels.map((r) =>
+        {active.map((r) =>
           editing === r.id ? (
             <ReelForm key={r.id} reel={r} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />
           ) : (
@@ -481,11 +493,58 @@ export default function RecirculateApp({ email }: { email: string }) {
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
               </button>
+              <button
+                className="rc-icbtn"
+                onClick={() => setArchived(r, true)}
+                aria-label="Archive — keep the clip but never reshare it"
+                title="Archive — keep the clip but never reshare it"
+              >
+                <Archive size={15} />
+              </button>
               <button className="rc-icbtn" onClick={() => remove(r)} aria-label="Delete">
                 <Trash2 size={15} />
               </button>
             </div>
           )
+        )}
+
+        {archived.length > 0 && (
+          <>
+            <button className="rc-add" style={{ marginTop: 14 }} onClick={() => setShowArchived((v) => !v)}>
+              <Archive size={14} /> {showArchived ? "Hide" : "Show"} archived · {archived.length}
+            </button>
+            {showArchived && (
+              <div style={{ marginTop: 10, opacity: 0.75 }}>
+                {archived.map((r) => (
+                  <div key={r.id} className="rc-card">
+                    {r.thumb_path ? (
+                      <img className="rc-thumb" src={publicUrl(r.thumb_path)} alt="" loading="lazy" />
+                    ) : (
+                      r.video_path && <video className="rc-thumb" src={publicUrl(r.video_path)} muted playsInline preload="none" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p className="rc-cardtitle">{r.title}</p>
+                      <p className="rc-meta">
+                        Archived — not in any rotation
+                        {r.posted_at ? ` · original ${fmtMonthYear(r.posted_at)}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      className="rc-icbtn"
+                      onClick={() => setArchived(r, false)}
+                      aria-label="Restore to library"
+                      title="Restore to library"
+                    >
+                      <ArchiveRestore size={15} />
+                    </button>
+                    <button className="rc-icbtn" onClick={() => remove(r)} aria-label="Delete">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -516,7 +575,30 @@ function ReelForm({
   const [licensedAudio, setLicensedAudio] = useState<boolean>(reel?.licensed_audio ?? false);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
   const [err, setErr] = useState("");
+
+  // AI rewrite: asks the server (Claude) for a fresh take on the caption. The
+  // result lands in the textarea for review — nothing saves until you save.
+  const rewriteCaption = async () => {
+    if (rewriting) return;
+    setRewriting(true);
+    setErr("");
+    try {
+      const res = await fetch("/api/rewrite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, caption }),
+      });
+      const data = await res.json();
+      if (!res.ok) setErr(data?.error || "Rewrite failed.");
+      else setCaption(data.caption);
+    } catch (e: any) {
+      setErr(e?.message || "Rewrite failed.");
+    } finally {
+      setRewriting(false);
+    }
+  };
 
   const submit = async () => {
     if (!title.trim() || busy) return;
@@ -557,7 +639,19 @@ function ReelForm({
       <label className="rc-label">Clip name</label>
       <input className="rc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Lev Tahor — chorus clip" />
 
-      <label className="rc-label">Caption</label>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <label className="rc-label" style={{ margin: "13px 0 5px" }}>Caption</label>
+        <button
+          type="button"
+          className="rc-add"
+          style={{ padding: "4px 9px", fontSize: 11.5 }}
+          onClick={rewriteCaption}
+          disabled={rewriting || (!caption.trim() && !title.trim())}
+          title="Have AI rewrite the caption so the repost reads fresh"
+        >
+          <Sparkles size={12} /> {rewriting ? "Rewriting…" : "Rewrite"}
+        </button>
+      </div>
       <textarea className="rc-area" rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="The caption you'll paste when you repost." />
 
       <label className="rc-label">Hashtags</label>
