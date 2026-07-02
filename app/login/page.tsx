@@ -6,7 +6,11 @@ export const dynamic = "force-dynamic";
 
 // Server-side: if the owner is already signed in, skip the form and go home.
 // (This replaces the redirect the Edge middleware used to do.)
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams?: { error?: string };
+}) {
   const supabase = await createSupabaseServer();
   const {
     data: { user },
@@ -17,5 +21,10 @@ export default async function LoginPage() {
     redirect("/");
   }
 
-  return <LoginForm />;
+  const initialError =
+    searchParams?.error === "link_invalid"
+      ? "That sign-in link didn't work — it may have expired or been opened in a different browser. Send a fresh one, or use the 6-digit code."
+      : undefined;
+
+  return <LoginForm initialError={initialError} />;
 }
