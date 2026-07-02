@@ -1,5 +1,6 @@
 import { db } from "./supabase";
 import { refreshLongLivedToken } from "./instagram";
+import { cred } from "./env";
 
 const DAY = 86400000;
 const EXPIRY_BUFFER = 5 * 60 * 1000; // refresh when under 5 minutes left
@@ -99,8 +100,8 @@ export async function getYouTubeToken(userId: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      client_id: cred("GOOGLE_CLIENT_ID"),
+      client_secret: cred("GOOGLE_CLIENT_SECRET"),
       refresh_token: conn.refresh_token,
       grant_type: "refresh_token",
     }),
@@ -133,8 +134,8 @@ export async function getTikTokToken(userId: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_key: process.env.TIKTOK_CLIENT_KEY!,
-      client_secret: process.env.TIKTOK_CLIENT_SECRET!,
+      client_key: cred("TIKTOK_CLIENT_KEY"),
+      client_secret: cred("TIKTOK_CLIENT_SECRET"),
       grant_type: "refresh_token",
       refresh_token: conn.refresh_token,
     }),

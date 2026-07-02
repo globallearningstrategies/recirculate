@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { originFrom } from "@/lib/origin";
+import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
 
@@ -31,13 +32,13 @@ export async function GET(req: NextRequest, { params }: { params: { platform: st
 
   let authUrl: URL;
   if (platform === "youtube") {
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    if (!cred("GOOGLE_CLIENT_ID") || !cred("GOOGLE_CLIENT_SECRET")) {
       return NextResponse.redirect(
         `${origin}/?connect_error=${encodeURIComponent("Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel first.")}`
       );
     }
     authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    authUrl.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID);
+    authUrl.searchParams.set("client_id", cred("GOOGLE_CLIENT_ID"));
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set(
@@ -48,13 +49,13 @@ export async function GET(req: NextRequest, { params }: { params: { platform: st
     authUrl.searchParams.set("prompt", "consent");      // forces a refresh token every time
     authUrl.searchParams.set("state", state);
   } else if (platform === "tiktok") {
-    if (!process.env.TIKTOK_CLIENT_KEY || !process.env.TIKTOK_CLIENT_SECRET) {
+    if (!cred("TIKTOK_CLIENT_KEY") || !cred("TIKTOK_CLIENT_SECRET")) {
       return NextResponse.redirect(
         `${origin}/?connect_error=${encodeURIComponent("Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET in Vercel first.")}`
       );
     }
     authUrl = new URL("https://www.tiktok.com/v2/auth/authorize/");
-    authUrl.searchParams.set("client_key", process.env.TIKTOK_CLIENT_KEY);
+    authUrl.searchParams.set("client_key", cred("TIKTOK_CLIENT_KEY"));
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("scope", "user.info.basic,video.publish");

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/supabase";
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { originFrom } from "@/lib/origin";
+import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
 
@@ -53,8 +54,8 @@ export async function GET(req: NextRequest, { params }: { params: { platform: st
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
             code,
-            client_id: process.env.GOOGLE_CLIENT_ID!,
-            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            client_id: cred("GOOGLE_CLIENT_ID"),
+            client_secret: cred("GOOGLE_CLIENT_SECRET"),
             redirect_uri: redirectUri,
             grant_type: "authorization_code",
           }),
@@ -83,8 +84,8 @@ export async function GET(req: NextRequest, { params }: { params: { platform: st
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            client_key: process.env.TIKTOK_CLIENT_KEY!,
-            client_secret: process.env.TIKTOK_CLIENT_SECRET!,
+            client_key: cred("TIKTOK_CLIENT_KEY"),
+            client_secret: cred("TIKTOK_CLIENT_SECRET"),
             code,
             grant_type: "authorization_code",
             redirect_uri: redirectUri,
