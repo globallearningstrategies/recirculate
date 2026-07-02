@@ -34,7 +34,7 @@ export default function LoginForm({ initialError }: { initialError?: string }) {
 
   // The code path exists for the installed PWA: iOS opens email links in the
   // browser, whose cookies are separate from the home-screen app's, so a
-  // tapped link can never sign the PWA in. Typing the emailed 6-digit code
+  // tapped link can never sign the PWA in. Typing the emailed one-time code
   // verifies directly in this context instead.
   const verifyCode = async () => {
     const token = code.trim();
@@ -83,7 +83,7 @@ export default function LoginForm({ initialError }: { initialError?: string }) {
         {state?.ok && (
           <>
             <label className="rc-label" htmlFor="otp" style={{ marginTop: 18 }}>
-              Or enter the 6-digit code from the email
+              Or enter the code from the email
             </label>
             <div style={{ display: "flex", gap: 8 }}>
               <input
@@ -91,8 +91,8 @@ export default function LoginForm({ initialError }: { initialError?: string }) {
                 id="otp"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                placeholder="123456"
-                maxLength={6}
+                placeholder="12345678"
+                maxLength={10}
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
                 onKeyDown={(e) => e.key === "Enter" && verifyCode()}

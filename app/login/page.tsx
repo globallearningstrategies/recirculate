@@ -23,7 +23,7 @@ export default async function LoginPage({
 
   const initialError =
     searchParams?.error === "link_invalid"
-      ? "That sign-in link didn't work — it may have expired or been opened in a different browser. Send a fresh one, or use the 6-digit code."
+      ? "That sign-in link didn't work — it may have expired or been opened in a different browser. Send a fresh one, or use the code from the email."
       : undefined;
 
   return <LoginForm initialError={initialError} />;
