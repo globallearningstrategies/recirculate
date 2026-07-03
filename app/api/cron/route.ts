@@ -20,6 +20,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // ?force=1 emails the digest even when nothing is due — for testing the
+  // pipeline and for "just show me what's up next" moments.
+  const force = new URL(req.url).searchParams.get("force") === "1";
+
   const { data: settings, error } = await db.from("settings").select("platform, cadence_days, active");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -30,7 +34,7 @@ export async function GET(req: Request) {
     if (!NAMES[cfg.platform]) continue;
     if (!cfg.active) { results.push({ platform: cfg.platform, skipped: "inactive" }); continue; }
     const s = await platformStatus(cfg.platform, cfg.cadence_days);
-    if (!s.due) {
+    if (!s.due && !force) {
       results.push({ platform: cfg.platform, skipped: `not due (${s.sinceLast}/${cfg.cadence_days} days)` });
       continue;
     }
