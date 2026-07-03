@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -42,6 +42,8 @@ const todayISO = () => new Date().toISOString();
 const daysBetween = (a: string, b: string) => Math.floor((+new Date(b) - +new Date(a)) / 86400000);
 const fmt = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const fmtMonthYear = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+const fmtDT = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, youtube: v });
 
 export default function RecirculateApp({
@@ -64,6 +66,10 @@ export default function RecirculateApp({
   const [posting, setPosting] = useState<string | null>(null);
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "never" | "notinrot" | "licensed">("all");
+  const [showLog, setShowLog] = useState(false);
+  const [logRows, setLogRows] = useState<any[] | null>(null);
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
@@ -169,6 +175,19 @@ export default function RecirculateApp({
       return +new Date(x) - +new Date(y);
     });
   const archived = reels.filter((r) => r.archived);
+
+  // ---- library search + filters (counts double as at-a-glance stats) ----
+  const q = query.trim().toLowerCase();
+  const neverCount = active.filter((r) => totalRecirc(r) === 0).length;
+  const notInRotCount = active.filter((r) => !r.platforms[plat]).length;
+  const licensedCount = active.filter((r) => r.licensed_audio).length;
+  const visible = active.filter((r) => {
+    if (q && !`${r.title} ${r.caption} ${r.hashtags}`.toLowerCase().includes(q)) return false;
+    if (filter === "never") return totalRecirc(r) === 0;
+    if (filter === "notinrot") return !r.platforms[plat];
+    if (filter === "licensed") return r.licensed_audio;
+    return true;
+  });
   const ordered = [...inRot].sort((a, b) => {
     const x = a.posted[plat], y = b.posted[plat];
     if (!x && !y) {
@@ -235,6 +254,40 @@ export default function RecirculateApp({
     await supabase.from("clips").update({ archived: value }).eq("id", reel.id);
   };
 
+  // Flip one platform's rotation membership straight from the card — no form.
+  const togglePlatform = async (reel: Reel, k: Platform) => {
+    const next = !reel.platforms[k];
+    setReels((rs) => rs.map((r) => (r.id === reel.id ? { ...r, platforms: { ...r.platforms, [k]: next } } : r)));
+    await supabase
+      .from("clip_platforms")
+      .upsert({ clip_id: reel.id, platform: k, enabled: next }, { onConflict: "clip_id,platform" });
+  };
+
+  // Onboard the whole back catalog in one tap instead of one form per clip.
+  const enableAllOn = async (k: Platform) => {
+    const missing = active.filter((r) => !r.platforms[k]);
+    if (!missing.length) return;
+    if (!window.confirm(`Add ${missing.length} clip${missing.length === 1 ? "" : "s"} to the ${PLATFORMS[k].name} rotation?`)) return;
+    const ids = new Set(missing.map((r) => r.id));
+    setReels((rs) => rs.map((r) => (ids.has(r.id) ? { ...r, platforms: { ...r.platforms, [k]: true } } : r)));
+    await supabase
+      .from("clip_platforms")
+      .upsert(missing.map((r) => ({ clip_id: r.id, platform: k, enabled: true })), { onConflict: "clip_id,platform" });
+  };
+
+  const toggleLog = async () => {
+    const next = !showLog;
+    setShowLog(next);
+    if (next && !logRows) {
+      const { data } = await supabase
+        .from("post_log")
+        .select("id, platform, posted_at, status, error, clips(title)")
+        .order("posted_at", { ascending: false })
+        .limit(25);
+      setLogRows(data ?? []);
+    }
+  };
+
   // Real publish: posts the clip to the selected platform, then advances the
   // rotation server-side. This posts to the live account, so we confirm first.
   const publishClip = async (clip: Reel) => {
@@ -244,7 +297,11 @@ export default function RecirculateApp({
       plat === "tiktok"
         ? "\n\nNote: until the TikTok app passes their audit, posts land as PRIVATE (only you can see them)."
         : "";
-    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${tiktokNote}`)) return;
+    const audioNote =
+      clip.licensed_audio && plat !== "instagram"
+        ? `\n\n⚠️ This clip uses Instagram licensed music — ${name} may mute it or flag it with Content ID.`
+        : "";
+    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${audioNote}${tiktokNote}`)) return;
     setPosting(clip.id);
     setPostMsg(null);
     try {
@@ -258,6 +315,7 @@ export default function RecirculateApp({
         setPostMsg({ ok: false, text: data?.error || "Publish failed." });
       } else {
         setPostMsg({ ok: true, text: `Published "${clip.title}" to ${name}. 🎉` });
+        setLogRows(null); // stale now — refetch on next open
         await load();
       }
     } catch (e: any) {
@@ -488,7 +546,45 @@ export default function RecirculateApp({
           </div>
         </div>
 
-        <p className="rc-meta" style={{ margin: "-6px 0 10px" }}>
+        <div style={{ position: "relative", margin: "0 0 8px" }}>
+          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+          <input
+            className="rc-input"
+            style={{ paddingLeft: 34 }}
+            placeholder="Search clips…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 8px" }}>
+          {(
+            [
+              ["all", `All · ${active.length}`],
+              ["never", `Never recirculated · ${neverCount}`],
+              ["notinrot", `Not on ${acc.name} · ${notInRotCount}`],
+              ["licensed", `Licensed audio · ${licensedCount}`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              className="rc-chip"
+              onClick={() => setFilter(key)}
+              style={{
+                cursor: "pointer",
+                fontFamily: "inherit",
+                ...(filter === key ? { color: "var(--text)", borderColor: acc.a, background: "var(--surface2)" } : {}),
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {filter === "notinrot" && notInRotCount > 0 && (
+          <button className="rc-add" style={{ marginBottom: 8 }} onClick={() => enableAllOn(plat)}>
+            <Plus size={14} /> Add all {notInRotCount} to {acc.name} rotation
+          </button>
+        )}
+        <p className="rc-meta" style={{ margin: "0 0 10px" }}>
           Sorted by priority — never-recirculated clips first, then the ones untouched the longest.
         </p>
 
@@ -500,7 +596,11 @@ export default function RecirculateApp({
 
         {editing === "new" && <ReelForm onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
 
-        {active.map((r) =>
+        {visible.length === 0 && (query || filter !== "all") && (
+          <div className="rc-empty">No clips match{query ? ` “${query}”` : " this filter"}.</div>
+        )}
+
+        {visible.map((r) =>
           editing === r.id ? (
             <ReelForm key={r.id} reel={r} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />
           ) : (
@@ -514,13 +614,28 @@ export default function RecirculateApp({
                 <p className="rc-cardtitle">{r.title}</p>
                 <div className="rc-badges">
                   {PK.map((k) => (
-                    <div
+                    <button
                       key={k}
                       className="rc-badge"
-                      style={r.platforms[k] ? { background: `linear-gradient(135deg,${PLATFORMS[k].a},${PLATFORMS[k].b})` } : {}}
+                      onClick={() => togglePlatform(r, k)}
+                      title={
+                        r.platforms[k]
+                          ? `In ${PLATFORMS[k].name} rotation — tap to remove`
+                          : `Tap to add to ${PLATFORMS[k].name} rotation`
+                      }
+                      aria-label={`Toggle ${PLATFORMS[k].name} rotation`}
+                      style={{
+                        cursor: "pointer",
+                        border: "none",
+                        padding: 0,
+                        font: "inherit",
+                        ...(r.platforms[k]
+                          ? { background: `linear-gradient(135deg,${PLATFORMS[k].a},${PLATFORMS[k].b})` }
+                          : {}),
+                      }}
                     >
                       <Icon p={k} size={13} color={r.platforms[k] ? "#15101B" : "var(--muted)"} />
-                    </div>
+                    </button>
                   ))}
                 </div>
                 {totalRecirc(r) === 0 ? (
@@ -623,6 +738,33 @@ export default function RecirculateApp({
               </div>
             )}
           </>
+        )}
+
+        <button className="rc-add" style={{ marginTop: 14 }} onClick={toggleLog}>
+          <History size={14} /> {showLog ? "Hide" : "Show"} activity
+        </button>
+        {showLog && (
+          <div style={{ marginTop: 10 }}>
+            {logRows === null ? (
+              <div className="rc-empty">Loading…</div>
+            ) : logRows.length === 0 ? (
+              <div className="rc-empty">Nothing logged yet — every publish (and failure) will show up here.</div>
+            ) : (
+              logRows.map((row) => (
+                <div key={row.id} className="rc-card" style={{ padding: "10px 14px", alignItems: "center" }}>
+                  <Icon p={row.platform as Platform} size={15} color="var(--muted)" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p className="rc-cardtitle" style={{ fontSize: 13 }}>{row.clips?.title ?? "Deleted clip"}</p>
+                    <p className="rc-meta" style={{ margin: "2px 0 0" }}>
+                      {PLATFORMS[row.platform as Platform]?.name ?? row.platform} · {fmtDT(row.posted_at)}
+                      {row.status !== "success" && row.error ? ` — ${row.error}` : ""}
+                    </p>
+                  </div>
+                  {row.status === "success" ? <Check size={14} color="#7ED9A0" /> : <X size={14} color="#FF5C7A" />}
+                </div>
+              ))
+            )}
+          </div>
         )}
       </div>
     </div>
