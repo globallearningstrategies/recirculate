@@ -145,7 +145,29 @@ export default function RecirculateApp({
   // never-posted order unspecified; we tie-break by original post date so the
   // content people haven't seen the longest recirculates first. ----
   const inRot = reels.filter((r) => !r.archived && r.platforms[plat]);
-  const active = reels.filter((r) => !r.archived);
+  // Across-all-platforms recirculation stats, for the library view.
+  const lastRecirc = (r: Reel) =>
+    PK.reduce<string | null>((m, k) => {
+      const p = r.posted[k];
+      return p && (!m || p > m) ? p : m;
+    }, null);
+  const totalRecirc = (r: Reel) => PK.reduce((n, k) => n + (r.timesPosted[k] || 0), 0);
+  // Library order = recirculation priority, same shape as the rotation rule but
+  // across every platform: never-recirculated clips first (oldest original
+  // first), then the ones untouched the longest — so nothing gets missed.
+  const active = reels
+    .filter((r) => !r.archived)
+    .sort((a, b) => {
+      const x = lastRecirc(a), y = lastRecirc(b);
+      if (!x && !y) {
+        const ax = a.posted_at ?? a.created_at ?? "";
+        const bx = b.posted_at ?? b.created_at ?? "";
+        return ax < bx ? -1 : ax > bx ? 1 : 0;
+      }
+      if (!x) return -1;
+      if (!y) return 1;
+      return +new Date(x) - +new Date(y);
+    });
   const archived = reels.filter((r) => r.archived);
   const ordered = [...inRot].sort((a, b) => {
     const x = a.posted[plat], y = b.posted[plat];
@@ -466,6 +488,10 @@ export default function RecirculateApp({
           </div>
         </div>
 
+        <p className="rc-meta" style={{ margin: "-6px 0 10px" }}>
+          Sorted by priority — never-recirculated clips first, then the ones untouched the longest.
+        </p>
+
         {importMsg && (
           <div className={"rc-msg " + (importMsg.ok ? "ok" : "err")} style={{ marginBottom: 10 }}>
             {importMsg.text}
@@ -497,14 +523,25 @@ export default function RecirculateApp({
                     </div>
                   ))}
                 </div>
-                <p className="rc-meta">
-                  {r.platforms[plat]
-                    ? r.posted[plat]
-                      ? `${acc.name}: last posted ${fmt(r.posted[plat]!)} · ${r.timesPosted[plat] || 0}×`
-                      : `${acc.name}: never posted`
-                    : `Not in ${acc.name} rotation`}
-                  {r.posted_at ? ` · original ${fmtMonthYear(r.posted_at)}` : ""}
-                </p>
+                {totalRecirc(r) === 0 ? (
+                  <p className="rc-meta" style={{ color: acc.a, fontWeight: 600 }}>
+                    Never recirculated
+                  </p>
+                ) : (
+                  <p className="rc-meta">
+                    {`Recirculated ${totalRecirc(r)}× · last ${fmt(lastRecirc(r)!)} · `}
+                    {PK.filter((k) => (r.timesPosted[k] || 0) > 0)
+                      .map((k) => `${PLATFORMS[k].name} ${r.timesPosted[k]}× (${fmt(r.posted[k]!)})`)
+                      .join(" · ")}
+                  </p>
+                )}
+                {(!r.platforms[plat] || r.posted_at) && (
+                  <p className="rc-meta">
+                    {[!r.platforms[plat] ? `Not in ${acc.name} rotation` : "", r.posted_at ? `Original ${fmtMonthYear(r.posted_at)}` : ""]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                )}
                 {(r.source === "instagram" || r.licensed_audio) && (
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                     {r.source === "instagram" && (
