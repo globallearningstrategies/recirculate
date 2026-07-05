@@ -208,6 +208,29 @@ export default function RecirculateApp({
   const dueNow = !globalLast || (sinceLast as number) >= cadence[plat];
   const daysLeft = globalLast ? Math.max(0, cadence[plat] - (sinceLast as number)) : 0;
 
+  // Cross-platform due map for the tab dots and the "post all due" button —
+  // the same rotation rule as above, evaluated for every platform.
+  const dueInfo = PK.map((k) => {
+    const next =
+      [...reels.filter((r) => !r.archived && r.platforms[k])].sort((a, b) => {
+        const x = a.posted[k], y = b.posted[k];
+        if (!x && !y) {
+          const ax = a.posted_at ?? a.created_at ?? "";
+          const bx = b.posted_at ?? b.created_at ?? "";
+          return ax < bx ? -1 : ax > bx ? 1 : 0;
+        }
+        if (!x) return -1;
+        if (!y) return 1;
+        return +new Date(x) - +new Date(y);
+      })[0] || null;
+    const last = reels.reduce<string | null>((m, r) => {
+      const p = r.posted[k];
+      return p && (!m || p > m) ? p : m;
+    }, null);
+    return { plat: k, next, due: !!next && (!last || daysBetween(last, todayISO()) >= cadence[k]) };
+  });
+  const duePlats = dueInfo.filter((d) => d.due);
+
   // ---- mutations ----
   const changeCadence = async (delta: number) => {
     const next = Math.min(60, Math.max(1, cadence[plat] + delta));
@@ -252,6 +275,43 @@ export default function RecirculateApp({
   const setArchived = async (reel: Reel, value: boolean) => {
     setReels((rs) => rs.map((r) => (r.id === reel.id ? { ...r, archived: value } : r)));
     await supabase.from("clips").update({ archived: value }).eq("id", reel.id);
+  };
+
+  // Post the suggested next clip on every platform that's due, in one go.
+  const postAllDue = async () => {
+    if (posting) return;
+    const targets = duePlats;
+    if (targets.length < 2) return;
+    const lines = targets.map((d) => `• ${PLATFORMS[d.plat].name}: "${d.next!.title}"`).join("\n");
+    const tiktokNote = targets.some((d) => d.plat === "tiktok")
+      ? "\n\nNote: TikTok posts land PRIVATE until their audit clears."
+      : "";
+    if (!window.confirm(`Post everything that's due?\n\n${lines}${tiktokNote}\n\nEach posts to your real account.`)) return;
+    setPosting("__all");
+    setPostMsg(null);
+    const ok: string[] = [];
+    const bad: string[] = [];
+    for (const d of targets) {
+      try {
+        const res = await fetch(`/api/post/${d.plat}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clipId: d.next!.id }),
+        });
+        const body = await res.json();
+        if (res.ok) ok.push(PLATFORMS[d.plat].name);
+        else bad.push(`${PLATFORMS[d.plat].name}: ${body?.error || "failed"}`);
+      } catch (e: any) {
+        bad.push(`${PLATFORMS[d.plat].name}: ${e?.message || "failed"}`);
+      }
+    }
+    setPostMsg({
+      ok: bad.length === 0,
+      text: [ok.length ? `Posted to ${ok.join(" + ")}. 🎉` : "", ...bad].filter(Boolean).join(" · "),
+    });
+    setLogRows(null);
+    setPosting(null);
+    await load();
   };
 
   // Flip one platform's rotation membership straight from the card — no form.
@@ -426,6 +486,18 @@ export default function RecirculateApp({
               <Icon p={k} size={17} color={k === plat ? "#15101B" : "var(--muted)"} />
               {PLATFORMS[k].name}
               <small>{PLATFORMS[k].sub}</small>
+              {dueInfo.find((d) => d.plat === k)?.due && (
+                <span
+                  title="Due — something is ready to post"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 99,
+                    background: k === plat ? "#15101B" : PLATFORMS[k].a,
+                    flex: "0 0 auto",
+                  }}
+                />
+              )}
             </button>
           ))}
         </div>
@@ -462,6 +534,18 @@ export default function RecirculateApp({
           <button className="rc-step" onClick={() => changeCadence(1)} aria-label="More days">+</button>
           <span>{cadence[plat] === 1 ? "day" : "days"}</span>
         </div>
+
+        {duePlats.length >= 2 && (
+          <button
+            className="rc-btn primary"
+            style={{ width: "100%", justifyContent: "center", marginBottom: 12 }}
+            onClick={postAllDue}
+            disabled={posting !== null}
+          >
+            <Send size={15} />
+            {posting === "__all" ? "Posting everywhere…" : `Post all due (${duePlats.length})`}
+          </button>
+        )}
 
         {upNext ? (
           <div className={"rc-hero" + (dueNow ? " due" : "")}>
