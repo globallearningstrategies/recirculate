@@ -1,22 +1,14 @@
 import { NextResponse } from "next/server";
-import { db, BUCKET } from "@/lib/supabase";
 import { createSupabaseServer } from "@/lib/supabase-server";
-import { publishReel } from "@/lib/instagram";
-import { publishYouTube } from "@/lib/publishers/youtube";
-import { publishTikTok } from "@/lib/publishers/tiktok";
-import { getInstagramToken, getYouTubeToken, getTikTokToken } from "@/lib/connections";
-import { cred } from "@/lib/env";
+import { publishClipTo } from "@/lib/publish";
 
 // Reels need a processing pass on Instagram's side, so allow time.
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 // One-click publish of a clip to a platform. Owner-authenticated via session,
-// then the privileged work runs with the service role. On success it advances
-// the rotation (same bookkeeping as "Mark as posted") and logs to post_log.
+// then lib/publish.ts does the privileged work with the service role.
 export async function POST(req: Request, { params }: { params: { platform: string } }) {
-  const platform = params.platform;
-
   const ssr = await createSupabaseServer();
   const {
     data: { user },
@@ -25,7 +17,6 @@ export async function POST(req: Request, { params }: { params: { platform: strin
   if (!user || (owner && user.email?.toLowerCase() !== owner)) {
     return NextResponse.json({ error: "Not authorized." }, { status: 401 });
   }
-  const userId = user.id;
 
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return NextResponse.json(
@@ -38,85 +29,14 @@ export async function POST(req: Request, { params }: { params: { platform: strin
   try {
     body = await req.json();
   } catch {}
-  const clipId = body?.clipId;
-  if (!clipId) return NextResponse.json({ error: "Missing clipId." }, { status: 400 });
+  if (!body?.clipId) return NextResponse.json({ error: "Missing clipId." }, { status: 400 });
 
-  if (!["instagram", "tiktok", "youtube"].includes(platform)) {
-    return NextResponse.json({ error: "Unknown platform." }, { status: 400 });
-  }
-
-  // Load the clip and confirm it belongs to the owner.
-  const { data: clip } = await db
-    .from("clips")
-    .select("id, user_id, title, caption, hashtags, video_path, songs(slug, spotify_url, apple_url, youtube_url)")
-    .eq("id", clipId)
-    .single();
-  if (!clip || clip.user_id !== userId) {
-    return NextResponse.json({ error: "Clip not found." }, { status: 404 });
-  }
-  if (!clip.video_path) {
-    return NextResponse.json({ error: "This clip has no video to post." }, { status: 400 });
-  }
-
-  // Get a valid token for the platform (each helper auto-refreshes when due).
-  let token: string;
   try {
-    if (platform === "instagram") token = await getInstagramToken(userId);
-    else if (platform === "youtube") token = await getYouTubeToken(userId);
-    else token = await getTikTokToken(userId);
+    const externalId = await publishClipTo(user.id, params.platform, body.clipId);
+    return NextResponse.json({ ok: true, externalId });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Connection error." }, { status: 400 });
+    const msg = e?.message || "Publish failed.";
+    const status = msg === "Unknown platform." || msg === "This clip has no video to post." ? 400 : msg === "Clip not found." ? 404 : 502;
+    return NextResponse.json({ error: msg }, { status });
   }
-
-  // Clip assigned to a song → append its tracked smart link, tagged with the
-  // platform so /listen clicks attribute back to the post that earned them.
-  const song: any = (clip as any).songs;
-  const listenLink =
-    song && (song.spotify_url || song.apple_url || song.youtube_url)
-      ? `\n\n🎧 Full song: ${
-          cred("APP_BASE_URL") || "https://recirculate-globallearningstrategies-projects.vercel.app"
-        }/listen/${song.slug}?src=${platform}`
-      : "";
-  const caption = [clip.caption, clip.hashtags].filter(Boolean).join("\n\n") + listenLink;
-
-  // Publish.
-  let externalId: string;
-  try {
-    if (platform === "instagram") {
-      const videoUrl = db.storage.from(BUCKET).getPublicUrl(clip.video_path).data.publicUrl;
-      externalId = await publishReel(token, videoUrl, caption);
-    } else if (platform === "youtube") {
-      externalId = await publishYouTube(token, clip as any, caption);
-    } else {
-      externalId = await publishTikTok(token, clip as any, caption);
-    }
-  } catch (e: any) {
-    await db
-      .from("post_log")
-      .insert({ user_id: userId, clip_id: clipId, platform, status: "error", error: e?.message || "publish failed" });
-    return NextResponse.json({ error: e?.message || "Publish failed." }, { status: 502 });
-  }
-
-  // Success: advance the rotation (oldest-first depends on last_posted_at) and log it.
-  const { data: cp } = await db
-    .from("clip_platforms")
-    .select("times_posted")
-    .eq("clip_id", clipId)
-    .eq("platform", platform)
-    .maybeSingle();
-  await db.from("clip_platforms").upsert(
-    {
-      clip_id: clipId,
-      platform,
-      enabled: true,
-      last_posted_at: new Date().toISOString(),
-      times_posted: (cp?.times_posted || 0) + 1,
-    },
-    { onConflict: "clip_id,platform" }
-  );
-  await db
-    .from("post_log")
-    .insert({ user_id: userId, clip_id: clipId, platform, status: "success", external_post_id: externalId });
-
-  return NextResponse.json({ ok: true, externalId });
 }

@@ -270,3 +270,21 @@ create table if not exists artist_snapshots (
   brevo_contacts int
 );
 alter table artist_snapshots enable row level security; -- service-role only
+
+-- ---------------------------------------------------------------------------
+-- Scheduled posts: approve now, the daily cron posts it that morning
+-- ---------------------------------------------------------------------------
+create table if not exists scheduled_posts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  clip_id uuid not null references clips(id) on delete cascade,
+  platform text not null check (platform in ('youtube','instagram','tiktok')),
+  run_at timestamptz not null,
+  status text not null default 'pending',  -- pending | done | error | canceled
+  error text,
+  created_at timestamptz default now()
+);
+alter table scheduled_posts enable row level security;
+drop policy if exists "own scheduled_posts" on scheduled_posts;
+create policy "own scheduled_posts" on scheduled_posts for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());

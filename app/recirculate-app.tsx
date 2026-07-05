@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -101,6 +101,9 @@ export default function RecirculateApp({
   const [clicks, setClicks] = useState<{ song_id: string; target: string }[]>([]);
   const [showSongs, setShowSongs] = useState(false);
   const [songEditing, setSongEditing] = useState<string | null>(null); // song id | "new" | null
+  const [sched, setSched] = useState<{ id: string; clip_id: string; platform: Platform; run_at: string }[]>([]);
+  const [schedClip, setSchedClip] = useState<Reel | null>(null); // clip being scheduled to current tab's platform
+  const [schedDate, setSchedDate] = useState("");
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
@@ -122,6 +125,11 @@ export default function RecirculateApp({
         supabase.from("songs").select("id,title,slug,spotify_url,apple_url,youtube_url,campaign_until").order("created_at", { ascending: false }),
         supabase.from("link_clicks").select("song_id,target"),
       ]);
+    const { data: schedRows } = await supabase
+      .from("scheduled_posts")
+      .select("id, clip_id, platform, run_at")
+      .eq("status", "pending")
+      .order("run_at", { ascending: true });
 
     const mapped: Reel[] = (clipRows ?? []).map((c: any) => {
       const byPlat: Record<string, any> = {};
@@ -171,6 +179,7 @@ export default function RecirculateApp({
     setConns(c);
     setSongs((songRows as Song[]) ?? []);
     setClicks((clickRows as { song_id: string; target: string }[]) ?? []);
+    setSched((schedRows as any[]) ?? []);
     setLoaded(true);
   }, [supabase]);
 
@@ -366,6 +375,31 @@ export default function RecirculateApp({
     setLogRows(null);
     setPosting(null);
     await load();
+  };
+
+  // Approve-now-post-later: writes a pending scheduled_posts row that the
+  // daily cron (~10 AM New York) executes on the chosen day.
+  const confirmSchedule = async () => {
+    if (!schedClip || !schedDate) return;
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) return;
+    const runAt = new Date(schedDate + "T00:00:00Z").toISOString();
+    const { data: row, error } = await supabase
+      .from("scheduled_posts")
+      .insert({ user_id: u.user.id, clip_id: schedClip.id, platform: plat, run_at: runAt })
+      .select("id, clip_id, platform, run_at")
+      .single();
+    if (!error && row) {
+      setSched((ss) => [...ss, row as any].sort((a, b) => (a.run_at < b.run_at ? -1 : 1)));
+      setPostMsg({ ok: true, text: `Scheduled "${schedClip.title}" for ${PLATFORMS[plat].name} on ${fmt(runAt)} (posts ~10 AM New York).` });
+    }
+    setSchedClip(null);
+    setSchedDate("");
+  };
+
+  const cancelSchedule = async (id: string) => {
+    setSched((ss) => ss.filter((s) => s.id !== id));
+    await supabase.from("scheduled_posts").delete().eq("id", id);
   };
 
   // Flip one platform's rotation membership straight from the card — no form.
@@ -681,6 +715,54 @@ export default function RecirculateApp({
           </button>
         )}
 
+        {sched.length > 0 && (
+          <>
+            <div className="rc-deck-label" style={{ margin: "0 0 6px" }}>Scheduled</div>
+            <div className="rc-deck" style={{ paddingBottom: 12 }}>
+              {sched.map((sp) => (
+                <div key={sp.id} className="rc-chip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Icon p={sp.platform} size={12} color={PLATFORMS[sp.platform]?.a} />
+                  {reels.find((r) => r.id === sp.clip_id)?.title ?? "clip"} · {fmt(sp.run_at)}
+                  <button
+                    onClick={() => cancelSchedule(sp.id)}
+                    aria-label="Cancel scheduled post"
+                    title="Cancel scheduled post"
+                    style={{ border: "none", background: "transparent", color: "var(--muted)", cursor: "pointer", padding: 0, display: "inline-flex" }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {schedClip && (
+          <div className="rc-form" style={{ marginBottom: 12 }}>
+            <label className="rc-label" style={{ marginTop: 0 }}>
+              Schedule “{schedClip.title}” to {acc.name} on
+            </label>
+            <input
+              className="rc-input"
+              type="date"
+              value={schedDate}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setSchedDate(e.target.value)}
+            />
+            <p className="rc-note">
+              Posts on that day&apos;s automatic run, ~10 AM New York time (or the next run if that day&apos;s already passed).
+            </p>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="rc-btn primary" disabled={!schedDate} onClick={confirmSchedule}>
+                <CalendarClock size={15} /> Schedule
+              </button>
+              <button className="rc-btn ghost" onClick={() => { setSchedClip(null); setSchedDate(""); }}>
+                <X size={15} /> Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {upNext ? (
           <div className={"rc-hero" + (dueNow ? " due" : "")}>
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -714,6 +796,13 @@ export default function RecirculateApp({
               <button className="rc-btn ghost" onClick={() => copyCaption(upNext)}>
                 {copied ? <Check size={15} /> : <Copy size={15} />}
                 {copied ? "Copied" : "Copy caption"}
+              </button>
+              <button
+                className="rc-btn ghost"
+                onClick={() => setSchedClip(upNext)}
+                title="Pick a day — it posts on that morning's automatic run"
+              >
+                <CalendarClock size={15} /> Schedule
               </button>
               <button className="rc-btn ghost" onClick={() => markPosted(upNext)} title="Just record it as posted without publishing">
                 <Check size={15} /> Mark posted
@@ -904,15 +993,25 @@ export default function RecirculateApp({
                 )}
               </div>
               {r.platforms[plat] && (
-                <button
-                  className="rc-icbtn"
-                  onClick={() => publishClip(r)}
-                  disabled={posting === r.id}
-                  aria-label={`Publish to ${acc.name} now`}
-                  title={`Publish to ${acc.name} now`}
-                >
-                  <Send size={15} />
-                </button>
+                <>
+                  <button
+                    className="rc-icbtn"
+                    onClick={() => publishClip(r)}
+                    disabled={posting === r.id}
+                    aria-label={`Publish to ${acc.name} now`}
+                    title={`Publish to ${acc.name} now`}
+                  >
+                    <Send size={15} />
+                  </button>
+                  <button
+                    className="rc-icbtn"
+                    onClick={() => { setSchedClip(r); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                    aria-label={`Schedule for ${acc.name}`}
+                    title={`Schedule for ${acc.name} — posts on the chosen morning's run`}
+                  >
+                    <CalendarClock size={15} />
+                  </button>
+                </>
               )}
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />

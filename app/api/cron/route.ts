@@ -3,6 +3,7 @@ import { db } from "@/lib/supabase";
 import { platformStatus } from "@/lib/rotation";
 import { getInstagramToken, getYouTubeToken, getTikTokToken } from "@/lib/connections";
 import { refreshPostMetrics } from "@/lib/metrics";
+import { publishClipTo } from "@/lib/publish";
 import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -30,7 +31,29 @@ export async function GET(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const results: any[] = [];
+  const alerts: string[] = [];
   const due: { platform: string; sinceLast: number | null; title: string }[] = [];
+
+  // ---- Scheduled posts first: the owner already approved these. Executing
+  // them before the due-check means a post that just went out resets its
+  // platform's cadence, so the digest below won't nag about it. ----
+  const { data: dueSched } = await db
+    .from("scheduled_posts")
+    .select("id, user_id, clip_id, platform")
+    .eq("status", "pending")
+    .lte("run_at", new Date().toISOString());
+  for (const sp of dueSched ?? []) {
+    try {
+      const externalId = await publishClipTo(sp.user_id, sp.platform, sp.clip_id);
+      await db.from("scheduled_posts").update({ status: "done" }).eq("id", sp.id);
+      results.push({ scheduled: sp.platform, posted: externalId });
+    } catch (e: any) {
+      const msg = e?.message || "publish failed";
+      await db.from("scheduled_posts").update({ status: "error", error: msg }).eq("id", sp.id);
+      alerts.push(`Scheduled ${NAMES[sp.platform] ?? sp.platform} post failed: ${msg}`);
+      results.push({ scheduled: sp.platform, error: msg });
+    }
+  }
 
   for (const cfg of settings ?? []) {
     if (!NAMES[cfg.platform]) continue;
@@ -49,7 +72,6 @@ export async function GET(req: Request) {
   // tokens forward as a side effect (Instagram's 60-day token, TikTok's
   // rotating refresh token, YouTube's hourly access token), so checking IS
   // maintaining — and a genuine failure gets flagged before a publish hits it.
-  const alerts: string[] = [];
   const getters: Record<string, (userId: string) => Promise<string>> = {
     instagram: getInstagramToken,
     youtube: getYouTubeToken,
