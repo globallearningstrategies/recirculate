@@ -4,6 +4,7 @@ import { platformStatus } from "@/lib/rotation";
 import { getInstagramToken, getYouTubeToken, getTikTokToken } from "@/lib/connections";
 import { refreshPostMetrics } from "@/lib/metrics";
 import { publishClipTo } from "@/lib/publish";
+import { adsConfigured, adInsightsLast7d } from "@/lib/meta-ads";
 import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -209,6 +210,9 @@ export async function GET(req: Request) {
         } catch {}
       }
 
+      // Meta ads performance (only when the ads env vars are configured).
+      const ads = adsConfigured() ? await adInsightsLast7d() : null;
+
       // Deltas vs. the previous snapshot, then record this week's.
       const { data: prev } = await db
         .from("artist_snapshots")
@@ -237,6 +241,15 @@ export async function GET(req: Request) {
             line("Listen clicks", `${clicks.length} — Spotify ${clickBy("spotify")} · Apple ${clickBy("apple")} · YouTube ${clickBy("youtube")}`) +
             (brevoContacts != null ? line("Email list", `${brevoContacts} fans${delta(brevoContacts, prev?.brevo_contacts)}`) : "") +
             (spotifyFollowers != null ? line("Spotify followers", `${spotifyFollowers.toLocaleString()}${delta(spotifyFollowers, prev?.spotify_followers)}`) : "") +
+            (ads
+              ? line(
+                  "Ads",
+                  ads.spend > 0
+                    ? `$${ads.spend.toFixed(2)} spent · ${ads.impressions.toLocaleString()} impressions · ${ads.linkClicks} link clicks` +
+                      (ads.linkClicks > 0 ? ` ($${(ads.spend / ads.linkClicks).toFixed(2)}/click)` : "")
+                    : "no spend this week"
+                )
+              : "") +
             `</ul>` +
             `<p><a href="${cred("APP_BASE_URL") || "https://recirculate-globallearningstrategies-projects.vercel.app"}" style="display:inline-block;background:#111;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Open Recirculate</a></p>` +
             `</div>`,

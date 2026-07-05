@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -104,6 +104,15 @@ export default function RecirculateApp({
   const [sched, setSched] = useState<{ id: string; clip_id: string; platform: Platform; run_at: string }[]>([]);
   const [schedClip, setSchedClip] = useState<Reel | null>(null); // clip being scheduled to current tab's platform
   const [schedDate, setSchedDate] = useState("");
+  // Meta ads promote panel
+  const [promoClip, setPromoClip] = useState<Reel | null>(null);
+  const [promoBudget, setPromoBudget] = useState("10");
+  const [promoDays, setPromoDays] = useState("7");
+  const [promoAudience, setPromoAudience] = useState("");
+  const [audiences, setAudiences] = useState<{ id: string; name: string }[] | null>(null);
+  const [adsConfigured, setAdsConfigured] = useState<boolean | null>(null);
+  const [promoBusy, setPromoBusy] = useState(false);
+  const [promoMsg, setPromoMsg] = useState<{ ok: boolean; text: string; url?: string } | null>(null);
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
@@ -400,6 +409,57 @@ export default function RecirculateApp({
   const cancelSchedule = async (id: string) => {
     setSched((ss) => ss.filter((s) => s.id !== id));
     await supabase.from("scheduled_posts").delete().eq("id", id);
+  };
+
+  // Meta ads: open the Promote panel and lazily load the saved audiences.
+  const openPromote = async (r: Reel) => {
+    setPromoClip(r);
+    setPromoMsg(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (audiences === null) {
+      try {
+        const res = await fetch("/api/ads/audiences");
+        const body = await res.json();
+        setAdsConfigured(!!body.configured);
+        setAudiences(body.audiences ?? []);
+      } catch {
+        setAdsConfigured(false);
+        setAudiences([]);
+      }
+    }
+  };
+
+  // Creates the PAUSED campaign — money only moves after review in Ads Manager.
+  const confirmPromote = async () => {
+    if (!promoClip || promoBusy) return;
+    setPromoBusy(true);
+    setPromoMsg(null);
+    try {
+      const res = await fetch("/api/ads/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clipId: promoClip.id,
+          dailyBudget: Number(promoBudget),
+          days: Number(promoDays),
+          audienceId: promoAudience || null,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setPromoMsg({ ok: false, text: body?.error || "Campaign creation failed." });
+      } else {
+        setPromoMsg({
+          ok: true,
+          text: `Draft campaign created (paused). Review and publish it in Ads Manager — nothing spends until you do.`,
+          url: body.manageUrl,
+        });
+      }
+    } catch (e: any) {
+      setPromoMsg({ ok: false, text: e?.message || "Campaign creation failed." });
+    } finally {
+      setPromoBusy(false);
+    }
   };
 
   // Flip one platform's rotation membership straight from the card — no form.
@@ -763,6 +823,66 @@ export default function RecirculateApp({
           </div>
         )}
 
+        {promoClip && (
+          <div className="rc-form" style={{ marginBottom: 12 }}>
+            <label className="rc-label" style={{ marginTop: 0 }}>
+              <Megaphone size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+              Promote “{promoClip.title}” — Instagram ad → {promoClip.song_id ? "its song's /listen page" : "the /listen hub"}
+            </label>
+            {adsConfigured === false ? (
+              <p className="rc-note">
+                Set <b>META_ADS_TOKEN</b> (Business Manager → System users → generate token with ads_management, with your
+                ad account + Page assigned), <b>META_AD_ACCOUNT_ID</b>, and <b>META_PAGE_ID</b> in Vercel, then redeploy.
+              </p>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <label className="rc-label">$ / day</label>
+                    <input className="rc-input" type="number" min={1} max={500} value={promoBudget} onChange={(e) => setPromoBudget(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label className="rc-label">Days</label>
+                    <input className="rc-input" type="number" min={1} max={30} value={promoDays} onChange={(e) => setPromoDays(e.target.value)} />
+                  </div>
+                </div>
+                <label className="rc-label">Audience</label>
+                <select className="rc-input" value={promoAudience} onChange={(e) => setPromoAudience(e.target.value)}>
+                  <option value="">Automatic (US, 18+, Instagram)</option>
+                  {(audiences ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+                <p className="rc-note">
+                  Max spend ≈ ${(Number(promoBudget) || 0) * (Number(promoDays) || 0)} · created <b>paused</b> — you review
+                  and publish in Ads Manager.
+                </p>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button className="rc-btn primary" disabled={promoBusy || audiences === null} onClick={confirmPromote}>
+                    <Megaphone size={15} /> {promoBusy ? "Creating…" : audiences === null ? "Loading…" : "Create draft campaign"}
+                  </button>
+                  <button className="rc-btn ghost" onClick={() => { setPromoClip(null); setPromoMsg(null); }}>
+                    <X size={15} /> Close
+                  </button>
+                </div>
+              </>
+            )}
+            {promoMsg && (
+              <div className={"rc-msg " + (promoMsg.ok ? "ok" : "err")} style={{ marginTop: 10 }}>
+                {promoMsg.text}
+                {promoMsg.url && (
+                  <>
+                    {" "}
+                    <a href={promoMsg.url} target="_blank" rel="noreferrer" style={{ color: "inherit", fontWeight: 700 }}>
+                      Open Ads Manager ↗
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {upNext ? (
           <div className={"rc-hero" + (dueNow ? " due" : "")}>
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -1012,6 +1132,16 @@ export default function RecirculateApp({
                     <CalendarClock size={15} />
                   </button>
                 </>
+              )}
+              {r.video_path && (
+                <button
+                  className="rc-icbtn"
+                  onClick={() => openPromote(r)}
+                  aria-label="Promote with a Meta ad"
+                  title="Promote — create a paused Instagram ad driving to /listen"
+                >
+                  <Megaphone size={15} />
+                </button>
               )}
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
