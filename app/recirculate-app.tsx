@@ -23,6 +23,7 @@ type Reel = {
   platforms: Record<Platform, boolean>;
   posted: Record<Platform, string | null>;
   timesPosted: Record<Platform, number>;
+  song_id: string | null;
 };
 
 type ReelFormData = {
@@ -35,6 +36,16 @@ type ReelFormData = {
   video_path: string | null;
   thumb_path: string | null;
   licensed_audio: boolean;
+  song_id: string | null;
+};
+
+type Song = {
+  id: string;
+  title: string;
+  slug: string;
+  spotify_url: string;
+  apple_url: string;
+  youtube_url: string;
 };
 
 const DEFAULT_CADENCE: Cadence = { instagram: 5, tiktok: 4, youtube: 7 };
@@ -45,6 +56,8 @@ const fmtMonthYear = (iso: string) => new Date(iso).toLocaleDateString(undefined
 const fmtDT = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, youtube: v });
+const slugify = (s: string) =>
+  s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60) || "song";
 
 export default function RecirculateApp({
   email,
@@ -77,6 +90,10 @@ export default function RecirculateApp({
   const [filter, setFilter] = useState<"all" | "never" | "notinrot" | "licensed">("all");
   const [showLog, setShowLog] = useState(false);
   const [logRows, setLogRows] = useState<any[] | null>(null);
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [clicks, setClicks] = useState<{ song_id: string; target: string }[]>([]);
+  const [showSongs, setShowSongs] = useState(false);
+  const [songEditing, setSongEditing] = useState<string | null>(null); // song id | "new" | null
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
@@ -87,14 +104,17 @@ export default function RecirculateApp({
 
   // ---- load ----
   const load = useCallback(async () => {
-    const [{ data: clipRows }, { data: settingRows }, { data: connRows }] = await Promise.all([
-      supabase
-        .from("clips")
-        .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
-        .order("created_at", { ascending: true }),
-      supabase.from("settings").select("platform,cadence_days"),
-      supabase.from("social_connections").select("platform,username"),
-    ]);
+    const [{ data: clipRows }, { data: settingRows }, { data: connRows }, { data: songRows }, { data: clickRows }] =
+      await Promise.all([
+        supabase
+          .from("clips")
+          .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,song_id,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
+          .order("created_at", { ascending: true }),
+        supabase.from("settings").select("platform,cadence_days"),
+        supabase.from("social_connections").select("platform,username"),
+        supabase.from("songs").select("id,title,slug,spotify_url,apple_url,youtube_url").order("created_at", { ascending: false }),
+        supabase.from("link_clicks").select("song_id,target"),
+      ]);
 
     const mapped: Reel[] = (clipRows ?? []).map((c: any) => {
       const byPlat: Record<string, any> = {};
@@ -127,6 +147,7 @@ export default function RecirculateApp({
           tiktok: byPlat.tiktok?.times_posted ?? 0,
           youtube: byPlat.youtube?.times_posted ?? 0,
         },
+        song_id: c.song_id ?? null,
       };
     });
 
@@ -139,6 +160,8 @@ export default function RecirculateApp({
     setReels(mapped);
     setCadence(cad);
     setConns(c);
+    setSongs((songRows as Song[]) ?? []);
+    setClicks((clickRows as { song_id: string; target: string }[]) ?? []);
     setLoaded(true);
   }, [supabase]);
 
@@ -440,12 +463,12 @@ export default function RecirculateApp({
     if (clipId) {
       await supabase
         .from("clips")
-        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio })
+        .update({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio, song_id: data.song_id })
         .eq("id", clipId);
     } else {
       const { data: inserted, error } = await supabase
         .from("clips")
-        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio })
+        .insert({ title: data.title, caption: data.caption, hashtags: data.hashtags, video_path: data.video_path, thumb_path: data.thumb_path, licensed_audio: data.licensed_audio, song_id: data.song_id })
         .select("id")
         .single();
       if (error || !inserted) return;
@@ -464,6 +487,42 @@ export default function RecirculateApp({
 
     setEditing(null);
     await load();
+  };
+
+  // Songs (smart links): create/update with a slug derived once from the
+  // title, so shared /listen URLs never break on rename.
+  const saveSong = async (s: Partial<Song> & { title: string }) => {
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) return;
+    if (s.id) {
+      await supabase
+        .from("songs")
+        .update({ title: s.title, spotify_url: s.spotify_url ?? "", apple_url: s.apple_url ?? "", youtube_url: s.youtube_url ?? "" })
+        .eq("id", s.id);
+    } else {
+      await supabase.from("songs").insert({
+        user_id: u.user.id,
+        title: s.title,
+        slug: slugify(s.title),
+        spotify_url: s.spotify_url ?? "",
+        apple_url: s.apple_url ?? "",
+        youtube_url: s.youtube_url ?? "",
+      });
+    }
+    setSongEditing(null);
+    await load();
+  };
+
+  const deleteSong = async (s: Song) => {
+    if (!window.confirm(`Delete "${s.title}"? Its /listen page stops working and clips lose the link.`)) return;
+    setSongs((ss) => ss.filter((x) => x.id !== s.id));
+    await supabase.from("songs").delete().eq("id", s.id);
+  };
+
+  const songClicks = (songId: string) => {
+    const rows = clicks.filter((c) => c.song_id === songId);
+    const by = (t: string) => rows.filter((c) => c.target === t).length;
+    return { total: rows.length, spotify: by("spotify"), apple: by("apple"), youtube: by("youtube") };
   };
 
   if (!loaded) return <div style={{ background: "#15101B", minHeight: "100vh" }} />;
@@ -696,7 +755,7 @@ export default function RecirculateApp({
           </div>
         )}
 
-        {editing === "new" && <ReelForm onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
+        {editing === "new" && <ReelForm songs={songs} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
 
         {visible.length === 0 && (query || filter !== "all") && (
           <div className="rc-empty">No clips match{query ? ` “${query}”` : " this filter"}.</div>
@@ -704,7 +763,7 @@ export default function RecirculateApp({
 
         {visible.map((r) =>
           editing === r.id ? (
-            <ReelForm key={r.id} reel={r} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />
+            <ReelForm key={r.id} reel={r} songs={songs} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />
           ) : (
             <div key={r.id} className={"rc-card" + (upNext && r.id === upNext.id ? " upnext" : "")}>
               {r.thumb_path ? (
@@ -759,8 +818,13 @@ export default function RecirculateApp({
                       .join(" · ")}
                   </p>
                 )}
-                {(r.source === "instagram" || r.licensed_audio) && (
+                {(r.source === "instagram" || r.licensed_audio || r.song_id) && (
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                    {r.song_id && (
+                      <span className="rc-tag-chip" title="Publishes include this song's tracked listen link">
+                        <Music size={11} /> {songs.find((s) => s.id === r.song_id)?.title ?? "Song"}
+                      </span>
+                    )}
                     {r.source === "instagram" && (
                       <span className="rc-tag-chip">
                         <Icon p="instagram" size={11} color="var(--lilac)" /> Imported
@@ -842,6 +906,59 @@ export default function RecirculateApp({
           </>
         )}
 
+        <button className="rc-add" style={{ marginTop: 14, marginRight: 8 }} onClick={() => setShowSongs((v) => !v)}>
+          <Music size={14} /> {showSongs ? "Hide" : "Show"} songs &amp; links{songs.length ? ` · ${songs.length}` : ""}
+        </button>
+        {showSongs && (
+          <div style={{ marginTop: 10 }}>
+            {songEditing === "new" ? (
+              <SongForm onSave={saveSong} onCancel={() => setSongEditing(null)} />
+            ) : (
+              <button className="rc-add" style={{ marginBottom: 10 }} onClick={() => setSongEditing("new")}>
+                <Plus size={14} /> Add song
+              </button>
+            )}
+            {songs.length === 0 && songEditing !== "new" && (
+              <div className="rc-empty">
+                Add a song with its Spotify / Apple Music / YouTube links.
+                <br />
+                Assign it to clips and every publish gets a tracked listen link.
+              </div>
+            )}
+            {songs.map((s) =>
+              songEditing === s.id ? (
+                <SongForm key={s.id} song={s} onSave={saveSong} onCancel={() => setSongEditing(null)} />
+              ) : (
+                <div key={s.id} className="rc-card" style={{ alignItems: "center" }}>
+                  <Music size={16} color="var(--lilac)" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p className="rc-cardtitle">{s.title}</p>
+                    <p className="rc-meta" style={{ margin: "3px 0 0" }}>
+                      {(() => {
+                        const st = songClicks(s.id);
+                        return st.total === 0
+                          ? "No clicks yet"
+                          : `${st.total} click${st.total === 1 ? "" : "s"} · Spotify ${st.spotify} · Apple ${st.apple} · YouTube ${st.youtube}`;
+                      })()}
+                    </p>
+                    <p className="rc-meta" style={{ margin: "3px 0 0" }}>
+                      <a href={`/listen/${s.slug}`} target="_blank" rel="noreferrer" style={{ color: "var(--lilac)" }}>
+                        /listen/{s.slug} ↗
+                      </a>
+                    </p>
+                  </div>
+                  <button className="rc-icbtn" onClick={() => setSongEditing(s.id)} aria-label="Edit song">
+                    <Pencil size={15} />
+                  </button>
+                  <button className="rc-icbtn" onClick={() => deleteSong(s)} aria-label="Delete song">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
         <button className="rc-add" style={{ marginTop: 14 }} onClick={toggleLog}>
           <History size={14} /> {showLog ? "Hide" : "Show"} activity
         </button>
@@ -875,18 +992,21 @@ export default function RecirculateApp({
 
 function ReelForm({
   reel,
+  songs,
   onSave,
   onCancel,
   publicUrl,
   supabase,
 }: {
   reel?: Reel;
+  songs: Song[];
   onSave: (d: ReelFormData) => Promise<void>;
   onCancel: () => void;
   publicUrl: (p: string) => string;
   supabase: ReturnType<typeof createSupabaseBrowser>;
 }) {
   const [title, setTitle] = useState(reel?.title || "");
+  const [songId, setSongId] = useState<string | null>(reel?.song_id ?? null);
   const [caption, setCaption] = useState(reel?.caption || "");
   const [hashtags, setHashtags] = useState(reel?.hashtags || "");
   const [platforms, setPlatforms] = useState<Record<Platform, boolean>>(
@@ -950,7 +1070,7 @@ function ReelForm({
         path = key;
         thumb = null;
       }
-      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path, thumb_path: thumb, licensed_audio: licensedAudio });
+      await onSave({ id: reel?.id, title: title.trim(), caption, hashtags, platforms, links, video_path: path, thumb_path: thumb, licensed_audio: licensedAudio, song_id: songId });
     } finally {
       setBusy(false);
     }
@@ -978,6 +1098,18 @@ function ReelForm({
 
       <label className="rc-label">Hashtags</label>
       <textarea className="rc-area" rows={2} value={hashtags} onChange={(e) => setHashtags(e.target.value)} placeholder="#yourtags #here" />
+
+      {songs.length > 0 && (
+        <>
+          <label className="rc-label">Song — publishes add its tracked listen link to the caption</label>
+          <select className="rc-input" value={songId ?? ""} onChange={(e) => setSongId(e.target.value || null)}>
+            <option value="">— no song link —</option>
+            {songs.map((s) => (
+              <option key={s.id} value={s.id}>{s.title}</option>
+            ))}
+          </select>
+        </>
+      )}
 
       <label className="rc-label">Video</label>
       <div className="rc-file">
@@ -1040,6 +1172,58 @@ function ReelForm({
         </button>
         <button className="rc-btn primary" onClick={submit} disabled={busy}>
           {busy ? "Saving…" : reel ? "Save changes" : "Add to rotation"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SongForm({
+  song,
+  onSave,
+  onCancel,
+}: {
+  song?: Song;
+  onSave: (s: Partial<Song> & { title: string }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(song?.title || "");
+  const [spotify, setSpotify] = useState(song?.spotify_url || "");
+  const [apple, setApple] = useState(song?.apple_url || "");
+  const [youtube, setYoutube] = useState(song?.youtube_url || "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave({
+        id: song?.id,
+        title: title.trim(),
+        spotify_url: spotify.trim(),
+        apple_url: apple.trim(),
+        youtube_url: youtube.trim(),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rc-form">
+      <label className="rc-label">Song title</label>
+      <input className="rc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Hallelujah" />
+      <label className="rc-label">Spotify link</label>
+      <input className="rc-input" value={spotify} onChange={(e) => setSpotify(e.target.value)} placeholder="https://open.spotify.com/track/…" />
+      <label className="rc-label">Apple Music link</label>
+      <input className="rc-input" value={apple} onChange={(e) => setApple(e.target.value)} placeholder="https://music.apple.com/…" />
+      <label className="rc-label">YouTube link</label>
+      <input className="rc-input" value={youtube} onChange={(e) => setYoutube(e.target.value)} placeholder="https://youtu.be/…" />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="rc-btn primary" disabled={busy || !title.trim()} onClick={save}>
+          <Check size={15} /> {busy ? "Saving…" : "Save song"}
+        </button>
+        <button className="rc-btn ghost" onClick={onCancel}>
+          <X size={15} /> Cancel
         </button>
       </div>
     </div>

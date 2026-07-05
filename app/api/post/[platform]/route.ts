@@ -5,6 +5,7 @@ import { publishReel } from "@/lib/instagram";
 import { publishYouTube } from "@/lib/publishers/youtube";
 import { publishTikTok } from "@/lib/publishers/tiktok";
 import { getInstagramToken, getYouTubeToken, getTikTokToken } from "@/lib/connections";
+import { cred } from "@/lib/env";
 
 // Reels need a processing pass on Instagram's side, so allow time.
 export const runtime = "nodejs";
@@ -47,7 +48,7 @@ export async function POST(req: Request, { params }: { params: { platform: strin
   // Load the clip and confirm it belongs to the owner.
   const { data: clip } = await db
     .from("clips")
-    .select("id, user_id, title, caption, hashtags, video_path")
+    .select("id, user_id, title, caption, hashtags, video_path, songs(slug, spotify_url, apple_url, youtube_url)")
     .eq("id", clipId)
     .single();
   if (!clip || clip.user_id !== userId) {
@@ -67,7 +68,16 @@ export async function POST(req: Request, { params }: { params: { platform: strin
     return NextResponse.json({ error: e?.message || "Connection error." }, { status: 400 });
   }
 
-  const caption = [clip.caption, clip.hashtags].filter(Boolean).join("\n\n");
+  // Clip assigned to a song → append its tracked smart link, tagged with the
+  // platform so /listen clicks attribute back to the post that earned them.
+  const song: any = (clip as any).songs;
+  const listenLink =
+    song && (song.spotify_url || song.apple_url || song.youtube_url)
+      ? `\n\n🎧 Full song: ${
+          cred("APP_BASE_URL") || "https://recirculate-globallearningstrategies-projects.vercel.app"
+        }/listen/${song.slug}?src=${platform}`
+      : "";
+  const caption = [clip.caption, clip.hashtags].filter(Boolean).join("\n\n") + listenLink;
 
   // Publish.
   let externalId: string;

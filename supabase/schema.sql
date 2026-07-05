@@ -204,3 +204,43 @@ create policy "clips owner update" on storage.objects for update to authenticate
 drop policy if exists "clips owner delete" on storage.objects;
 create policy "clips owner delete" on storage.objects for delete to authenticated
   using (bucket_id = 'clips');
+
+-- ---------------------------------------------------------------------------
+-- Smart-link funnel (/listen): songs with streaming URLs, clip→song
+-- assignment, and click tracking so social posts become measurable funnels.
+-- ---------------------------------------------------------------------------
+
+create table if not exists songs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  title text not null,
+  slug text not null,
+  spotify_url text default '',
+  apple_url text default '',
+  youtube_url text default '',
+  created_at timestamptz default now(),
+  unique (user_id, slug)
+);
+
+alter table clips add column if not exists song_id uuid references songs(id) on delete set null;
+
+create table if not exists link_clicks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  song_id uuid references songs(id) on delete cascade,
+  target text,   -- 'spotify' | 'apple' | 'youtube'
+  src text,      -- 'instagram' | 'tiktok' | 'youtube' | 'direct'
+  created_at timestamptz default now()
+);
+
+alter table songs enable row level security;
+alter table link_clicks enable row level security;
+
+drop policy if exists "own songs" on songs;
+create policy "own songs" on songs for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Clicks are inserted server-side (service role) only; the owner reads stats.
+drop policy if exists "own link_clicks" on link_clicks;
+create policy "own link_clicks" on link_clicks for select
+  using (user_id = auth.uid());
