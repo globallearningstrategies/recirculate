@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/supabase";
+import SubscribeForm from "./subscribe-form";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,7 @@ export default async function ListenHub() {
             </Link>
           ))}
         </div>
+        <SubscribeForm />
       </div>
     </div>
   );

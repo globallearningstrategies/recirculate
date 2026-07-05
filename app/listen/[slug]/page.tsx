@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/supabase";
+import SubscribeForm from "../subscribe-form";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,7 @@ export default async function SongPage({
                 </a>
               ))}
             </div>
+            <SubscribeForm />
             <p className="rc-sub" style={{ marginTop: 18, fontSize: 12 }}>
               <Link href="/listen" style={{ color: "var(--muted)" }}>More songs</Link>
             </p>
