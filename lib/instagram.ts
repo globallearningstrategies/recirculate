@@ -170,3 +170,37 @@ export async function publishReel(
   }
   return published.id as string;
 }
+
+// Public engagement numbers for one media object. Like/comment counts come
+// from plain media fields; views need the insights edge (Reels). Anything the
+// token's scopes can't see just comes back null instead of failing the batch.
+export async function fetchMediaStats(
+  accessToken: string,
+  mediaId: string
+): Promise<{ views: number | null; likes: number | null; comments: number | null }> {
+  const out: { views: number | null; likes: number | null; comments: number | null } = {
+    views: null,
+    likes: null,
+    comments: null,
+  };
+  try {
+    const f = await (
+      await fetch(
+        `${GRAPH}/${VERSION}/${mediaId}?fields=like_count,comments_count&access_token=${encodeURIComponent(accessToken)}`
+      )
+    ).json();
+    if (typeof f.like_count === "number") out.likes = f.like_count;
+    if (typeof f.comments_count === "number") out.comments = f.comments_count;
+  } catch {}
+  try {
+    const i = await (
+      await fetch(
+        `${GRAPH}/${VERSION}/${mediaId}/insights?metric=views&access_token=${encodeURIComponent(accessToken)}`
+      )
+    ).json();
+    const d = i?.data?.[0];
+    const v = d?.total_value?.value ?? d?.values?.[0]?.value;
+    if (typeof v === "number") out.views = v;
+  } catch {}
+  return out;
+}

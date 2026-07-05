@@ -24,6 +24,8 @@ type Reel = {
   posted: Record<Platform, string | null>;
   timesPosted: Record<Platform, number>;
   song_id: string | null;
+  source_views: number | null;
+  source_likes: number | null;
 };
 
 type ReelFormData = {
@@ -56,6 +58,8 @@ const fmtMonthYear = (iso: string) => new Date(iso).toLocaleDateString(undefined
 const fmtDT = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, youtube: v });
+const fmtNum = (n: number) =>
+  n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K" : String(n);
 const slugify = (s: string) =>
   s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60) || "song";
 
@@ -87,7 +91,9 @@ export default function RecirculateApp({
   const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "never" | "notinrot" | "licensed">("all");
+  const [filter, setFilter] = useState<"all" | "never" | "notinrot" | "licensed" | "hits">("all");
+  const [statsBusy, setStatsBusy] = useState(false);
+  const [statsMsg, setStatsMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [logRows, setLogRows] = useState<any[] | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
@@ -108,7 +114,7 @@ export default function RecirculateApp({
       await Promise.all([
         supabase
           .from("clips")
-          .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,song_id,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
+          .select("id,title,caption,hashtags,video_path,thumb_path,source,licensed_audio,archived,posted_at,created_at,song_id,source_views,source_likes,clip_platforms(platform,enabled,link,last_posted_at,times_posted)")
           .order("created_at", { ascending: true }),
         supabase.from("settings").select("platform,cadence_days"),
         supabase.from("social_connections").select("platform,username"),
@@ -148,6 +154,8 @@ export default function RecirculateApp({
           youtube: byPlat.youtube?.times_posted ?? 0,
         },
         song_id: c.song_id ?? null,
+        source_views: c.source_views ?? null,
+        source_likes: c.source_likes ?? null,
       };
     });
 
@@ -211,13 +219,17 @@ export default function RecirculateApp({
   const neverCount = active.filter((r) => totalRecirc(r) === 0).length;
   const notInRotCount = active.filter((r) => !r.platforms[plat]).length;
   const licensedCount = active.filter((r) => r.licensed_audio).length;
-  const visible = active.filter((r) => {
+  const hitsCount = active.filter((r) => r.source_views != null).length;
+  const base = active.filter((r) => {
     if (q && !`${r.title} ${r.caption} ${r.hashtags}`.toLowerCase().includes(q)) return false;
     if (filter === "never") return totalRecirc(r) === 0;
     if (filter === "notinrot") return !r.platforms[plat];
     if (filter === "licensed") return r.licensed_audio;
+    if (filter === "hits") return r.source_views != null;
     return true;
   });
+  // Top performers ranks by real audience numbers instead of rotation priority.
+  const visible = filter === "hits" ? [...base].sort((a, b) => (b.source_views ?? 0) - (a.source_views ?? 0)) : base;
   const ordered = [...inRot].sort((a, b) => {
     const x = a.posted[plat], y = b.posted[plat];
     if (!x && !y) {
@@ -371,10 +383,42 @@ export default function RecirculateApp({
     if (next && !logRows) {
       const { data } = await supabase
         .from("post_log")
-        .select("id, platform, posted_at, status, error, clips(title)")
+        .select("id, platform, posted_at, status, error, views, likes, clips(title)")
         .order("posted_at", { ascending: false })
         .limit(25);
       setLogRows(data ?? []);
+    }
+  };
+
+  // Pull fresh view/like counts from Instagram (originals + reposts) and
+  // YouTube. Takes a little while — it's one API call per Instagram media.
+  const refreshStats = async () => {
+    if (statsBusy) return;
+    setStatsBusy(true);
+    setStatsMsg(null);
+    try {
+      const res = await fetch("/api/metrics/refresh", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) {
+        setStatsMsg({ ok: false, text: body?.error || "Stats refresh failed." });
+      } else {
+        const bits = [
+          `${body.instagram_originals ?? 0} originals`,
+          `${body.instagram_posts ?? 0} IG reposts`,
+          `${body.youtube_posts ?? 0} Shorts`,
+        ];
+        const errs = (body.errors ?? []).join(" · ");
+        setStatsMsg({
+          ok: !errs,
+          text: `Stats updated: ${bits.join(" · ")}.` + (errs ? ` ${errs}` : ""),
+        });
+        setLogRows(null);
+        await load();
+      }
+    } catch (e: any) {
+      setStatsMsg({ ok: false, text: e?.message || "Stats refresh failed." });
+    } finally {
+      setStatsBusy(false);
     }
   };
 
@@ -724,6 +768,7 @@ export default function RecirculateApp({
               ["never", `Never recirculated · ${neverCount}`],
               ["notinrot", `Not on ${acc.name} · ${notInRotCount}`],
               ["licensed", `Licensed audio · ${licensedCount}`],
+              ...(hitsCount > 0 ? ([["hits", `Top performers · ${hitsCount}`]] as const) : []),
             ] as const
           ).map(([key, label]) => (
             <button
@@ -818,8 +863,14 @@ export default function RecirculateApp({
                       .join(" · ")}
                   </p>
                 )}
-                {(r.source === "instagram" || r.licensed_audio || r.song_id) && (
+                {(r.source === "instagram" || r.licensed_audio || r.song_id || r.source_views != null) && (
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                    {r.source_views != null && (
+                      <span className="rc-tag-chip" title="Views on the original Instagram post">
+                        ▶ {fmtNum(r.source_views)}
+                        {r.source_likes != null ? ` · ♥ ${fmtNum(r.source_likes)}` : ""}
+                      </span>
+                    )}
                     {r.song_id && (
                       <span className="rc-tag-chip" title="Publishes include this song's tracked listen link">
                         <Music size={11} /> {songs.find((s) => s.id === r.song_id)?.title ?? "Song"}
@@ -906,9 +957,23 @@ export default function RecirculateApp({
           </>
         )}
 
+        <button
+          className="rc-add"
+          style={{ marginTop: 14, marginRight: 8 }}
+          onClick={refreshStats}
+          disabled={statsBusy}
+          title="Pull view/like counts from Instagram and YouTube"
+        >
+          <RotateCw size={14} /> {statsBusy ? "Refreshing stats…" : "Refresh stats"}
+        </button>
         <button className="rc-add" style={{ marginTop: 14, marginRight: 8 }} onClick={() => setShowSongs((v) => !v)}>
           <Music size={14} /> {showSongs ? "Hide" : "Show"} songs &amp; links{songs.length ? ` · ${songs.length}` : ""}
         </button>
+        {statsMsg && (
+          <div className={"rc-msg " + (statsMsg.ok ? "ok" : "err")} style={{ marginTop: 10 }}>
+            {statsMsg.text}
+          </div>
+        )}
         {showSongs && (
           <div style={{ marginTop: 10 }}>
             {songEditing === "new" ? (
@@ -976,6 +1041,8 @@ export default function RecirculateApp({
                     <p className="rc-cardtitle" style={{ fontSize: 13 }}>{row.clips?.title ?? "Deleted clip"}</p>
                     <p className="rc-meta" style={{ margin: "2px 0 0" }}>
                       {PLATFORMS[row.platform as Platform]?.name ?? row.platform} · {fmtDT(row.posted_at)}
+                      {row.views != null ? ` · ▶ ${fmtNum(row.views)}` : ""}
+                      {row.likes != null ? ` · ♥ ${fmtNum(row.likes)}` : ""}
                       {row.status !== "success" && row.error ? ` — ${row.error}` : ""}
                     </p>
                   </div>

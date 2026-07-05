@@ -244,3 +244,16 @@ create policy "own songs" on songs for all
 drop policy if exists "own link_clicks" on link_clicks;
 create policy "own link_clicks" on link_clicks for select
   using (user_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- Performance metrics pulled back from the platforms (see /api/metrics/refresh)
+-- ---------------------------------------------------------------------------
+alter table post_log add column if not exists views int;
+alter table post_log add column if not exists likes int;
+alter table post_log add column if not exists comments int;
+alter table post_log add column if not exists shares int;
+alter table post_log add column if not exists metrics_at timestamptz;
+
+alter table clips add column if not exists source_views int;
+alter table clips add column if not exists source_likes int;
+alter table clips add column if not exists metrics_at timestamptz;
