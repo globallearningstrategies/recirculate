@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function Home({
   searchParams,
 }: {
-  searchParams?: { connected?: string; connect_error?: string };
+  searchParams?: { connected?: string; connect_error?: string; review?: string };
 }) {
   const supabase = await createSupabaseServer();
   const {
@@ -28,5 +28,5 @@ export default async function Home({
       ? { ok: false, text: searchParams.connect_error }
       : null;
 
-  return <RecirculateApp email={user.email ?? ""} notice={notice} />;
+  return <RecirculateApp email={user.email ?? ""} notice={notice} review={searchParams?.review ?? null} />;
 }

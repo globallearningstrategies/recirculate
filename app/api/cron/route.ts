@@ -81,6 +81,7 @@ export async function GET(req: Request) {
           (d) =>
             `<li style="margin:8px 0"><strong>${NAMES[d.platform]}</strong> — up next: “${d.title}”` +
             (d.sinceLast != null ? ` <span style="color:#888">(last post ${d.sinceLast} days ago)</span>` : " <span style=\"color:#888\">(never posted)</span>") +
+            ` · <a href="${appUrl}/?review=${d.platform}" style="color:#6b4fd8">Publish&nbsp;→</a>` +
             `</li>`
         )
         .join("");

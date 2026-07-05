@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
@@ -49,15 +49,22 @@ const emptyMap = <T,>(v: T): Record<Platform, T> => ({ instagram: v, tiktok: v, 
 export default function RecirculateApp({
   email,
   notice,
+  review,
 }: {
   email: string;
   notice?: { ok: boolean; text: string } | null;
+  review?: string | null;
 }) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
+  // A ?review=<platform> link (from the daily digest email) lands on that
+  // platform's tab and pops the publish confirm for its suggested clip.
+  const reviewPlat = review && PK.includes(review as Platform) ? (review as Platform) : null;
+  const reviewPending = useRef(!!reviewPlat);
+
   const [reels, setReels] = useState<Reel[]>([]);
   const [cadence, setCadence] = useState<Cadence>(DEFAULT_CADENCE);
-  const [plat, setPlat] = useState<Platform>("instagram");
+  const [plat, setPlat] = useState<Platform>(reviewPlat ?? "instagram");
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -384,6 +391,17 @@ export default function RecirculateApp({
       setPosting(null);
     }
   };
+
+  // Arrived via a digest-email link: pop the publish confirm for this
+  // platform's suggested clip as soon as the library is loaded. One-shot —
+  // the URL is cleaned so a refresh doesn't re-trigger it.
+  useEffect(() => {
+    if (!loaded || !reviewPending.current) return;
+    reviewPending.current = false;
+    window.history.replaceState({}, "", "/");
+    if (upNext) publishClip(upNext);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   const runImport = async () => {
     if (importing) return;
