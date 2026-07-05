@@ -48,6 +48,7 @@ type Song = {
   spotify_url: string;
   apple_url: string;
   youtube_url: string;
+  campaign_until: string | null;
 };
 
 const DEFAULT_CADENCE: Cadence = { instagram: 5, tiktok: 4, youtube: 7 };
@@ -118,7 +119,7 @@ export default function RecirculateApp({
           .order("created_at", { ascending: true }),
         supabase.from("settings").select("platform,cadence_days"),
         supabase.from("social_connections").select("platform,username"),
-        supabase.from("songs").select("id,title,slug,spotify_url,apple_url,youtube_url").order("created_at", { ascending: false }),
+        supabase.from("songs").select("id,title,slug,spotify_url,apple_url,youtube_url,campaign_until").order("created_at", { ascending: false }),
         supabase.from("link_clicks").select("song_id,target"),
       ]);
 
@@ -184,10 +185,17 @@ export default function RecirculateApp({
 
   const acc = PLATFORMS[plat];
 
+  // Songs currently being pushed: their clips outrank everything in rotation.
+  const campaignSet = new Set(
+    songs.filter((s) => s.campaign_until && new Date(s.campaign_until) > new Date()).map((s) => s.id)
+  );
+  const isCampaign = (r: Reel) => !!(r.song_id && campaignSet.has(r.song_id));
+
   // ---- rotation rule (kept identical to reference/recirculate-ui.jsx):
   // never-posted first, then oldest last_posted_at. The reference left the
   // never-posted order unspecified; we tie-break by original post date so the
-  // content people haven't seen the longest recirculates first. ----
+  // content people haven't seen the longest recirculates first. Campaign
+  // clips sort ahead of all of it while their song's push is active. ----
   const inRot = reels.filter((r) => !r.archived && r.platforms[plat]);
   // Across-all-platforms recirculation stats, for the library view.
   const lastRecirc = (r: Reel) =>
@@ -231,6 +239,8 @@ export default function RecirculateApp({
   // Top performers ranks by real audience numbers instead of rotation priority.
   const visible = filter === "hits" ? [...base].sort((a, b) => (b.source_views ?? 0) - (a.source_views ?? 0)) : base;
   const ordered = [...inRot].sort((a, b) => {
+    const ac = isCampaign(a) ? 0 : 1, bc = isCampaign(b) ? 0 : 1;
+    if (ac !== bc) return ac - bc;
     const x = a.posted[plat], y = b.posted[plat];
     if (!x && !y) {
       const ax = a.posted_at ?? a.created_at ?? "";
@@ -255,6 +265,8 @@ export default function RecirculateApp({
   const dueInfo = PK.map((k) => {
     const next =
       [...reels.filter((r) => !r.archived && r.platforms[k])].sort((a, b) => {
+        const ac = isCampaign(a) ? 0 : 1, bc = isCampaign(b) ? 0 : 1;
+        if (ac !== bc) return ac - bc;
         const x = a.posted[k], y = b.posted[k];
         if (!x && !y) {
           const ax = a.posted_at ?? a.created_at ?? "";
@@ -541,7 +553,7 @@ export default function RecirculateApp({
     if (s.id) {
       await supabase
         .from("songs")
-        .update({ title: s.title, spotify_url: s.spotify_url ?? "", apple_url: s.apple_url ?? "", youtube_url: s.youtube_url ?? "" })
+        .update({ title: s.title, spotify_url: s.spotify_url ?? "", apple_url: s.apple_url ?? "", youtube_url: s.youtube_url ?? "", campaign_until: s.campaign_until ?? null })
         .eq("id", s.id);
     } else {
       await supabase.from("songs").insert({
@@ -551,6 +563,7 @@ export default function RecirculateApp({
         spotify_url: s.spotify_url ?? "",
         apple_url: s.apple_url ?? "",
         youtube_url: s.youtube_url ?? "",
+        campaign_until: s.campaign_until ?? null,
       });
     }
     setSongEditing(null);
@@ -673,6 +686,7 @@ export default function RecirculateApp({
             <div style={{ display: "flex", alignItems: "center" }}>
               <span className="rc-eyebrow">
                 <Icon p={plat} size={12} color={acc.b} /> Up next on {acc.name}
+                {isCampaign(upNext) ? " · 📣 campaign" : ""}
               </span>
               <span className="rc-status">
                 <Clock size={12} />
@@ -997,7 +1011,14 @@ export default function RecirculateApp({
                 <div key={s.id} className="rc-card" style={{ alignItems: "center" }}>
                   <Music size={16} color="var(--lilac)" />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p className="rc-cardtitle">{s.title}</p>
+                    <p className="rc-cardtitle">
+                      {s.title}
+                      {s.campaign_until && new Date(s.campaign_until) > new Date() && (
+                        <span className="rc-tag-chip warn" style={{ marginLeft: 8 }}>
+                          📣 campaign until {fmt(s.campaign_until)}
+                        </span>
+                      )}
+                    </p>
                     <p className="rc-meta" style={{ margin: "3px 0 0" }}>
                       {(() => {
                         const st = songClicks(s.id);
@@ -1258,6 +1279,7 @@ function SongForm({
   const [spotify, setSpotify] = useState(song?.spotify_url || "");
   const [apple, setApple] = useState(song?.apple_url || "");
   const [youtube, setYoutube] = useState(song?.youtube_url || "");
+  const [campaign, setCampaign] = useState(song?.campaign_until ? song.campaign_until.slice(0, 10) : "");
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
@@ -1269,6 +1291,7 @@ function SongForm({
         spotify_url: spotify.trim(),
         apple_url: apple.trim(),
         youtube_url: youtube.trim(),
+        campaign_until: campaign ? new Date(campaign + "T23:59:59").toISOString() : null,
       });
     } finally {
       setBusy(false);
@@ -1285,6 +1308,10 @@ function SongForm({
       <input className="rc-input" value={apple} onChange={(e) => setApple(e.target.value)} placeholder="https://music.apple.com/…" />
       <label className="rc-label">YouTube link</label>
       <input className="rc-input" value={youtube} onChange={(e) => setYoutube(e.target.value)} placeholder="https://youtu.be/…" />
+      <label className="rc-label">
+        📣 Campaign — push this song&apos;s clips to the front of every rotation until (leave empty for none)
+      </label>
+      <input className="rc-input" type="date" value={campaign} onChange={(e) => setCampaign(e.target.value)} />
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button className="rc-btn primary" disabled={busy || !title.trim()} onClick={save}>
           <Check size={15} /> {busy ? "Saving…" : "Save song"}

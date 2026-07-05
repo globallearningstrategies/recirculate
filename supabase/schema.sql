@@ -257,3 +257,16 @@ alter table post_log add column if not exists metrics_at timestamptz;
 alter table clips add column if not exists source_views int;
 alter table clips add column if not exists source_likes int;
 alter table clips add column if not exists metrics_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- Campaign mode + weekly scorecard
+-- ---------------------------------------------------------------------------
+alter table songs add column if not exists campaign_until timestamptz;
+
+create table if not exists artist_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  taken_at timestamptz default now(),
+  spotify_followers int,
+  brevo_contacts int
+);
+alter table artist_snapshots enable row level security; -- service-role only
