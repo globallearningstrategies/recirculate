@@ -22,7 +22,9 @@ export async function sendPushToOwner(payload: { title: string; body: string; ur
       sent++;
     } catch (e: any) {
       if (e?.statusCode === 404 || e?.statusCode === 410) {
-        await db.from("push_subscriptions").delete().eq("id", s.id).catch(() => {});
+        try {
+          await db.from("push_subscriptions").delete().eq("id", s.id);
+        } catch {}
       }
     }
   }
