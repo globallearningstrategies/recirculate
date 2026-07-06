@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -113,6 +113,7 @@ export default function RecirculateApp({
   const [adsConfigured, setAdsConfigured] = useState<boolean | null>(null);
   const [promoBusy, setPromoBusy] = useState(false);
   const [promoMsg, setPromoMsg] = useState<{ ok: boolean; text: string; url?: string } | null>(null);
+  const [lyricSong, setLyricSong] = useState<Song | null>(null);
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
 
@@ -409,6 +410,29 @@ export default function RecirculateApp({
   const cancelSchedule = async (id: string) => {
     setSched((ss) => ss.filter((s) => s.id !== id));
     await supabase.from("scheduled_posts").delete().eq("id", id);
+  };
+
+  // Hand the video file to the phone's share sheet — the easy path for
+  // posting to accounts the app isn't connected to (e.g. a second Instagram).
+  const shareClip = async (r: Reel) => {
+    if (!r.video_path) return;
+    const url = publicUrl(r.video_path);
+    try {
+      const nav: any = navigator;
+      if (nav.share && nav.canShare) {
+        const blob = await (await fetch(url)).blob();
+        const file = new File([blob], `${(r.title || "clip").replace(/[^\w-]+/g, "_")}.mp4`, { type: "video/mp4" });
+        if (nav.canShare({ files: [file] })) {
+          await nav.share({ files: [file], title: r.title });
+          return;
+        }
+        await nav.share({ url, title: r.title });
+        return;
+      }
+    } catch {
+      /* user cancelled or share unsupported — fall through */
+    }
+    window.open(url, "_blank");
   };
 
   // Meta ads: open the Promote panel and lazily load the saved audiences.
@@ -1134,14 +1158,24 @@ export default function RecirculateApp({
                 </>
               )}
               {r.video_path && (
-                <button
-                  className="rc-icbtn"
-                  onClick={() => openPromote(r)}
-                  aria-label="Promote with a Meta ad"
-                  title="Promote — create a paused Instagram ad driving to /listen"
-                >
-                  <Megaphone size={15} />
-                </button>
+                <>
+                  <button
+                    className="rc-icbtn"
+                    onClick={() => openPromote(r)}
+                    aria-label="Promote with a Meta ad"
+                    title="Promote — create a paused Instagram ad driving to /listen"
+                  >
+                    <Megaphone size={15} />
+                  </button>
+                  <button
+                    className="rc-icbtn"
+                    onClick={() => shareClip(r)}
+                    aria-label="Share the video file"
+                    title="Share the video file — post it anywhere (e.g. your other Instagram)"
+                  >
+                    <Share2 size={15} />
+                  </button>
+                </>
               )}
               <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
                 <Pencil size={15} />
@@ -1219,6 +1253,18 @@ export default function RecirculateApp({
         )}
         {showSongs && (
           <div style={{ marginTop: 10 }}>
+            {lyricSong && (
+              <LyricVideoForm
+                song={lyricSong}
+                supabase={supabase}
+                onCancel={() => setLyricSong(null)}
+                onDone={async (text) => {
+                  setLyricSong(null);
+                  setImportMsg({ ok: true, text });
+                  await load();
+                }}
+              />
+            )}
             {songEditing === "new" ? (
               <SongForm onSave={saveSong} onCancel={() => setSongEditing(null)} />
             ) : (
@@ -1262,6 +1308,14 @@ export default function RecirculateApp({
                       </a>
                     </p>
                   </div>
+                  <button
+                    className="rc-icbtn"
+                    onClick={() => setLyricSong(s)}
+                    aria-label="Generate lyric video"
+                    title="Generate a lyric video for this song"
+                  >
+                    <Clapperboard size={15} />
+                  </button>
                   <button className="rc-icbtn" onClick={() => setSongEditing(s.id)} aria-label="Edit song">
                     <Pencil size={15} />
                   </button>
@@ -1549,6 +1603,122 @@ function SongForm({
           <X size={15} /> Cancel
         </button>
       </div>
+    </div>
+  );
+}
+
+function LyricVideoForm({
+  song,
+  supabase,
+  onDone,
+  onCancel,
+}: {
+  song: Song;
+  supabase: ReturnType<typeof createSupabaseBrowser>;
+  onDone: (message: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [lyrics, setLyrics] = useState("");
+  const [start, setStart] = useState("0");
+  const [duration, setDuration] = useState("30");
+  const [style, setStyle] = useState("midnight");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const generate = async () => {
+    if (busy) return;
+    if (!file) { setErr("Pick the song's audio file first."); return; }
+    if (!lyrics.trim()) { setErr("Paste the lyrics for this section."); return; }
+    setBusy(true);
+    setErr("");
+    try {
+      const { data: u } = await supabase.auth.getUser();
+      if (!u.user) throw new Error("Not signed in.");
+      const ext = (file.name.split(".").pop() || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const key = `${u.user.id}/audio/${song.slug}_${Date.now()}.${ext}`;
+      const up = await supabase.storage.from("clips").upload(key, file, { contentType: file.type || "audio/mpeg" });
+      if (up.error) throw new Error("Audio upload failed: " + up.error.message);
+
+      const res = await fetch("/api/lyric-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          songId: song.id,
+          audioPath: key,
+          lyrics,
+          start: Number(start) || 0,
+          duration: Number(duration) || 30,
+          style,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Rendering failed.");
+      await onDone(`Lyric video for "${song.title}" is in your library — top of the Never recirculated pile. Use the share button to post it to your other account.`);
+    } catch (e: any) {
+      setErr(e?.message || "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rc-form">
+      <label className="rc-label" style={{ marginTop: 0 }}>
+        <Clapperboard size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+        Lyric video — “{song.title}”
+      </label>
+
+      <label className="rc-label">Audio file (mp3 / m4a / wav)</label>
+      <div className="rc-file">
+        <input type="file" accept="audio/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        {file && <div style={{ marginTop: 4 }}>Selected: {file.name}</div>}
+      </div>
+
+      <label className="rc-label">
+        Lyrics for this section — one line per screen. Optional [m:ss] stamps sync lines to the video clock, e.g. “[0:04] first line”.
+      </label>
+      <textarea
+        className="rc-area"
+        rows={6}
+        value={lyrics}
+        onChange={(e) => setLyrics(e.target.value)}
+        placeholder={"You can leave the stamps out —\nlines will be spread evenly."}
+      />
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label className="rc-label">Start in song (sec)</label>
+          <input className="rc-input" type="number" min={0} value={start} onChange={(e) => setStart(e.target.value)} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="rc-label">Length (sec, max 90)</label>
+          <input className="rc-input" type="number" min={10} max={90} value={duration} onChange={(e) => setDuration(e.target.value)} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="rc-label">Style</label>
+          <select className="rc-input" value={style} onChange={(e) => setStyle(e.target.value)}>
+            <option value="midnight">Midnight</option>
+            <option value="sunset">Sunset</option>
+            <option value="ocean">Ocean</option>
+            <option value="forest">Forest</option>
+          </select>
+        </div>
+      </div>
+
+      <p className="rc-note">Rendering takes about a minute — keep the app open until it finishes.</p>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button className="rc-btn primary" disabled={busy} onClick={generate}>
+          <Clapperboard size={15} /> {busy ? "Rendering…" : "Generate video"}
+        </button>
+        <button className="rc-btn ghost" onClick={onCancel} disabled={busy}>
+          <X size={15} /> Cancel
+        </button>
+      </div>
+      {err && (
+        <div className="rc-msg err" style={{ marginTop: 10 }}>{err}</div>
+      )}
     </div>
   );
 }
