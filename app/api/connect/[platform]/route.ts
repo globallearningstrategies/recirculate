@@ -43,7 +43,8 @@ export async function GET(req: NextRequest, { params }: { params: { platform: st
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set(
       "scope",
-      "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
+      // force-ssl covers comment replies (the inbox); upload + readonly cover publishing and stats.
+      "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl"
     );
     authUrl.searchParams.set("access_type", "offline"); // needed for a refresh token
     authUrl.searchParams.set("prompt", "consent");      // forces a refresh token every time

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal, MessageCircle } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -91,7 +91,15 @@ export default function RecirculateApp({
   // One toast for every outcome — publish, import, stats, schedule — fixed
   // above the nav bar where the thumb already is.
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
-  const [view, setView] = useState<"queue" | "library" | "songs" | "activity">("queue");
+  const [view, setView] = useState<"queue" | "library" | "songs" | "activity" | "inbox">("queue");
+  // Comments inbox
+  const [inbox, setInbox] = useState<{ id: string; platform: Platform; author: string; text: string; when: string; media: string | null }[] | null>(null);
+  const [inboxErrs, setInboxErrs] = useState<string[]>([]);
+  const [inboxBusy, setInboxBusy] = useState(false);
+  const [replyId, setReplyId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [sendingReply, setSendingReply] = useState(false);
   const [moreId, setMoreId] = useState<string | null>(null); // card with the ⋯ actions open
   const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
@@ -208,6 +216,27 @@ export default function RecirculateApp({
     const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  const refreshInbox = useCallback(async () => {
+    setInboxBusy(true);
+    try {
+      const res = await fetch("/api/comments");
+      const body = await res.json();
+      setInbox(body.items ?? []);
+      setInboxErrs(body.errors ?? []);
+    } catch {
+      setInbox([]);
+      setInboxErrs(["Couldn't load comments — try again."]);
+    } finally {
+      setInboxBusy(false);
+    }
+  }, []);
+
+  // The Inbox loads the first time it's opened.
+  useEffect(() => {
+    if (view !== "inbox" || inbox !== null || inboxBusy) return;
+    refreshInbox();
+  }, [view, inbox, inboxBusy, refreshInbox]);
 
   // The Activity view loads its log the first time it's opened.
   useEffect(() => {
@@ -524,6 +553,51 @@ export default function RecirculateApp({
     await supabase
       .from("clip_platforms")
       .upsert(missing.map((r) => ({ clip_id: r.id, platform: k, enabled: true })), { onConflict: "clip_id,platform" });
+  };
+
+  // ✨ draft → owner edits → send. Nothing posts without the send tap.
+  const draftReply = async (item: { id: string; author: string; text: string }) => {
+    if (drafting) return;
+    setDrafting(true);
+    try {
+      const res = await fetch("/api/comments/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: item.text, author: item.author }),
+      });
+      const body = await res.json();
+      if (!res.ok) setToast({ ok: false, text: body?.error || "Draft failed." });
+      else setReplyText(body.reply);
+    } catch (e: any) {
+      setToast({ ok: false, text: e?.message || "Draft failed." });
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  const sendReply = async (item: { id: string; platform: Platform; author: string }) => {
+    if (sendingReply || !replyText.trim()) return;
+    setSendingReply(true);
+    try {
+      const res = await fetch("/api/comments/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: item.platform, commentId: item.id, text: replyText.trim() }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setToast({ ok: false, text: body?.error || "Reply failed." });
+      } else {
+        setToast({ ok: true, text: `Replied to ${item.author}. 💬` });
+        setInbox((xs) => (xs ?? []).filter((x) => x.id !== item.id));
+        setReplyId(null);
+        setReplyText("");
+      }
+    } catch (e: any) {
+      setToast({ ok: false, text: e?.message || "Reply failed." });
+    } finally {
+      setSendingReply(false);
+    }
   };
 
   // Pull fresh view/like counts from Instagram (originals + reposts) and
@@ -1368,6 +1442,68 @@ export default function RecirculateApp({
           </div>
         )}
 
+        {view === "inbox" && (
+          <div style={{ marginTop: 4 }}>
+            <div className="rc-libhead">
+              <h2>Inbox {inbox && inbox.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {inbox.length}</span>}</h2>
+              <button className="rc-add" onClick={refreshInbox} disabled={inboxBusy}>
+                <RotateCw size={14} /> {inboxBusy ? "Checking…" : "Refresh"}
+              </button>
+            </div>
+            <p className="rc-meta" style={{ margin: "-4px 0 10px" }}>
+              Fan comments from Instagram and YouTube. Fast replies are the cheapest growth there is.
+            </p>
+            {inboxErrs.map((e, i) => (
+              <div key={i} className="rc-msg err" style={{ marginBottom: 8 }}>{e}</div>
+            ))}
+            {inbox === null || (inboxBusy && !inbox?.length) ? (
+              <div className="rc-empty">Checking your posts for comments…</div>
+            ) : inbox.length === 0 ? (
+              <div className="rc-empty">All caught up — no unanswered comments found. 🎉</div>
+            ) : (
+              inbox.map((c) => (
+                <div key={c.id} className="rc-card" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Icon p={c.platform} size={14} color={PLATFORMS[c.platform]?.a} />
+                    <b style={{ fontSize: 13 }}>{c.author}</b>
+                    <span className="rc-meta" style={{ margin: 0, marginLeft: "auto" }}>{fmtDT(c.when)}</span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.45 }}>{c.text}</p>
+                  {c.media && <p className="rc-meta" style={{ margin: 0 }}>on: {c.media}…</p>}
+                  {replyId === c.id ? (
+                    <div>
+                      <textarea
+                        className="rc-area"
+                        rows={2}
+                        value={replyText}
+                        onChange={(e) => setReplyText(e.target.value)}
+                        placeholder={`Reply to ${c.author}…`}
+                      />
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <button className="rc-add" onClick={() => draftReply(c)} disabled={drafting}>
+                          <Sparkles size={13} /> {drafting ? "Drafting…" : "Draft"}
+                        </button>
+                        <button className="rc-add" onClick={() => sendReply(c)} disabled={sendingReply || !replyText.trim()}>
+                          <Send size={13} /> {sendingReply ? "Sending…" : "Send"}
+                        </button>
+                        <button className="rc-add" onClick={() => { setReplyId(null); setReplyText(""); }}>
+                          <X size={13} /> Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <button className="rc-add" onClick={() => { setReplyId(c.id); setReplyText(""); }}>
+                        <MessageCircle size={13} /> Reply
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
         {toast && (
           <div
             className={"rc-msg rc-toast " + (toast.ok ? "ok" : "err")}
@@ -1384,6 +1520,7 @@ export default function RecirculateApp({
             [
               ["queue", "Queue", Clock, duePlats.length > 0],
               ["library", "Library", LayoutGrid, false],
+              ["inbox", "Inbox", MessageCircle, false],
               ["songs", "Songs", Music, false],
               ["activity", "Activity", History, false],
             ] as const
