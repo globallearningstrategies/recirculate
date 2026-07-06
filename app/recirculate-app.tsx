@@ -1619,26 +1619,66 @@ function LyricVideoForm({
   onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
+  const [uploadedKey, setUploadedKey] = useState<string | null>(null);
   const [lyrics, setLyrics] = useState("");
   const [start, setStart] = useState("0");
   const [duration, setDuration] = useState("30");
   const [style, setStyle] = useState("midnight");
+  const [lang, setLang] = useState("auto");
   const [busy, setBusy] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [err, setErr] = useState("");
+
+  // Upload the audio once and reuse the key for transcribe + generate.
+  const ensureUploaded = async (): Promise<string> => {
+    if (uploadedKey) return uploadedKey;
+    if (!file) throw new Error("Pick the song's audio file first.");
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) throw new Error("Not signed in.");
+    const ext = (file.name.split(".").pop() || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const key = `${u.user.id}/audio/${song.slug}_${Date.now()}.${ext}`;
+    const up = await supabase.storage.from("clips").upload(key, file, { contentType: file.type || "audio/mpeg" });
+    if (up.error) throw new Error("Audio upload failed: " + up.error.message);
+    setUploadedKey(key);
+    return key;
+  };
+
+  // CapCut-style auto-captions: Whisper listens to the chosen segment and
+  // fills the textarea with [m:ss]-stamped lines for review.
+  const autoTranscribe = async () => {
+    if (busy || transcribing) return;
+    setTranscribing(true);
+    setErr("");
+    try {
+      const key = await ensureUploaded();
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioPath: key,
+          start: Number(start) || 0,
+          duration: Number(duration) || 30,
+          language: lang === "auto" ? undefined : lang,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Transcription failed.");
+      setLyrics(body.lyrics);
+    } catch (e: any) {
+      setErr(e?.message || "Transcription failed.");
+    } finally {
+      setTranscribing(false);
+    }
+  };
 
   const generate = async () => {
     if (busy) return;
     if (!file) { setErr("Pick the song's audio file first."); return; }
-    if (!lyrics.trim()) { setErr("Paste the lyrics for this section."); return; }
+    if (!lyrics.trim()) { setErr("Paste or auto-transcribe the lyrics first."); return; }
     setBusy(true);
     setErr("");
     try {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) throw new Error("Not signed in.");
-      const ext = (file.name.split(".").pop() || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const key = `${u.user.id}/audio/${song.slug}_${Date.now()}.${ext}`;
-      const up = await supabase.storage.from("clips").upload(key, file, { contentType: file.type || "audio/mpeg" });
-      if (up.error) throw new Error("Audio upload failed: " + up.error.message);
+      const key = await ensureUploaded();
 
       const res = await fetch("/api/lyric-video", {
         method: "POST",
@@ -1671,12 +1711,40 @@ function LyricVideoForm({
 
       <label className="rc-label">Audio file (mp3 / m4a / wav)</label>
       <div className="rc-file">
-        <input type="file" accept="audio/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        <input
+          type="file"
+          accept="audio/*"
+          onChange={(e) => { setFile(e.target.files?.[0] ?? null); setUploadedKey(null); }}
+        />
         {file && <div style={{ marginTop: 4 }}>Selected: {file.name}</div>}
       </div>
 
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="rc-add"
+          onClick={autoTranscribe}
+          disabled={transcribing || busy || !file}
+          title="Whisper listens to the chosen segment and writes timed lyric lines — Hebrew, English, and French all work"
+        >
+          <Sparkles size={13} /> {transcribing ? "Listening…" : "Auto-transcribe lyrics"}
+        </button>
+        <select
+          className="rc-input"
+          style={{ width: "auto", padding: "6px 10px", fontSize: 12.5 }}
+          value={lang}
+          onChange={(e) => setLang(e.target.value)}
+          aria-label="Lyrics language hint"
+        >
+          <option value="auto">Detect language</option>
+          <option value="he">עברית</option>
+          <option value="en">English</option>
+          <option value="fr">Français</option>
+        </select>
+      </div>
+
       <label className="rc-label">
-        Lyrics for this section — one line per screen. Optional [m:ss] stamps sync lines to the video clock, e.g. “[0:04] first line”.
+        Lyrics for this section — one line per screen. Optional [m:ss] stamps sync lines to the video clock, e.g. “[0:04] first line”. Auto-transcribed lines land here for you to fix up before rendering.
       </label>
       <textarea
         className="rc-area"

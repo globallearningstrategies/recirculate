@@ -7,6 +7,8 @@ const nextConfig = {
     outputFileTracingIncludes: {
       "/api/lyric-video": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
       "/api/lyric-video/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
+      "/api/transcribe": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
+      "/api/transcribe/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
     },
   },
 };

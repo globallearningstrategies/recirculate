@@ -85,6 +85,34 @@ function run(args: string[]): Promise<void> {
   });
 }
 
+// Trim the chosen segment to a small mono MP3 — what we feed the transcriber.
+// Timestamps in the transcript come back relative to this slice, which is
+// exactly the video clock the lyric lines run on.
+export async function extractAudioSegment(
+  audio: Buffer,
+  audioExt: string,
+  start: number,
+  duration: number
+): Promise<Buffer> {
+  const dir = await mkdtemp(path.join(tmpdir(), "seg-"));
+  try {
+    const inFile = path.join(dir, `in.${audioExt.replace(/[^a-z0-9]/gi, "") || "mp3"}`);
+    await writeFile(inFile, audio);
+    const out = path.join(dir, "seg.mp3");
+    await run([
+      "-y",
+      "-ss", String(Math.max(0, start)),
+      "-t", String(Math.min(90, Math.max(5, duration))),
+      "-i", inFile,
+      "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+      out,
+    ]);
+    return await readFile(out);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function renderLyricVideo(opts: {
   audio: Buffer;
   audioExt: string; // "mp3" | "m4a" | "wav" …
