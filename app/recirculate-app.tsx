@@ -251,18 +251,20 @@ export default function RecirculateApp({
     if (!key) return false;
     const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(key.length / 4) * 4, "="));
     const appKey = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
-    const reg = await navigator.serviceWorker.ready;
+    // register() (idempotent) instead of .ready — .ready never settles if the
+    // initial registration failed, which would hang the bell button forever.
+    const reg = await navigator.serviceWorker.register("/sw.js");
     const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
     const json = sub.toJSON();
     const { data: u } = await supabase.auth.getUser();
     if (!u.user || !json.endpoint || !json.keys) return false;
-    await supabase
+    const { error } = await supabase
       .from("push_subscriptions")
       .upsert(
         { user_id: u.user.id, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth },
         { onConflict: "endpoint" }
       );
-    return true;
+    return !error;
   }, [supabase]);
 
   useEffect(() => {
@@ -294,10 +296,10 @@ export default function RecirculateApp({
         return;
       }
       const ok = await pushSubscribe();
-      setPushState("on");
+      setPushState(ok ? "on" : "prompt"); // keep the bell visible so a failed save can be retried
       setToast({
         ok,
-        text: ok ? "Notifications on — you'll get a buzz when something's due. 🔔" : "Enabled, but saving the subscription failed — try again.",
+        text: ok ? "Notifications on — you'll get a buzz when something's due. 🔔" : "Saving the subscription failed — tap the bell to try again.",
       });
     } catch (e: any) {
       setToast({ ok: false, text: e?.message || "Couldn't enable notifications." });
@@ -309,6 +311,7 @@ export default function RecirculateApp({
     try {
       const res = await fetch("/api/comments");
       const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Couldn't load comments.");
       setInbox(body.items ?? []);
       setInboxErrs(body.errors ?? []);
     } catch {
@@ -452,6 +455,8 @@ export default function RecirculateApp({
   };
 
   const markPosted = async (reel: Reel) => {
+    if (posting) return; // double-tap writes duplicate log rows
+    setPosting(reel.id);
     const when = todayISO();
     const nextTimes = (reel.timesPosted[plat] || 0) + 1;
     // optimistic
@@ -462,12 +467,16 @@ export default function RecirculateApp({
           : r
       )
     );
-    await supabase
-      .from("clip_platforms")
-      .update({ last_posted_at: when, times_posted: nextTimes })
-      .eq("clip_id", reel.id)
-      .eq("platform", plat);
-    await supabase.from("post_log").insert({ clip_id: reel.id, platform: plat, status: "success" });
+    try {
+      await supabase
+        .from("clip_platforms")
+        .update({ last_posted_at: when, times_posted: nextTimes })
+        .eq("clip_id", reel.id)
+        .eq("platform", plat);
+      await supabase.from("post_log").insert({ clip_id: reel.id, platform: plat, status: "success" });
+    } finally {
+      setPosting(null);
+    }
   };
 
   const remove = async (reel: Reel) => {
@@ -529,7 +538,9 @@ export default function RecirculateApp({
     if (!schedClip || !schedDate) return;
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) return;
-    const runAt = new Date(schedDate + "T00:00:00Z").toISOString();
+    // LOCAL midnight, not UTC — otherwise the chip and toast render the day
+    // before the one that was picked (midnight UTC = evening in New York).
+    const runAt = new Date(schedDate + "T00:00:00").toISOString();
     const { data: row, error } = await supabase
       .from("scheduled_posts")
       .insert({ user_id: u.user.id, clip_id: schedClip.id, platform: plat, run_at: runAt })
@@ -900,16 +911,24 @@ export default function RecirculateApp({
       setToast({ ok: false, text: "Upload failed: " + up.error.message });
       return;
     }
-    if (magnet) {
-      await supabase.storage.from("clips").remove([magnet.file_path]).catch(() => {});
-      await supabase.from("lead_magnet").delete().eq("id", magnet.id);
-    }
-    const { data: row } = await supabase
+    // Insert the new row first; only delete the old one once the replacement
+    // exists — a failed insert must not destroy the live magnet.
+    const old = magnet;
+    const { data: row, error: insErr } = await supabase
       .from("lead_magnet")
       .insert({ user_id: u.user.id, title: title.trim(), file_path: key })
       .select("id, title, file_path")
       .single();
-    setMagnet((row as any) ?? null);
+    if (insErr || !row) {
+      await supabase.storage.from("clips").remove([key]).catch(() => {});
+      setToast({ ok: false, text: "Couldn't save the lead magnet — try again." });
+      return;
+    }
+    if (old) {
+      await supabase.from("lead_magnet").delete().eq("id", old.id);
+      await supabase.storage.from("clips").remove([old.file_path]).catch(() => {});
+    }
+    setMagnet(row as any);
     setToast({ ok: true, text: `Lead magnet live — /listen now trades "${title.trim()}" for an email.` });
   };
 
@@ -1141,7 +1160,7 @@ export default function RecirculateApp({
               className="rc-input"
               type="date"
               value={schedDate}
-              min={new Date().toISOString().slice(0, 10)}
+              min={`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(new Date().getDate()).padStart(2, "0")}`}
               onChange={(e) => setSchedDate(e.target.value)}
             />
             <p className="rc-note">

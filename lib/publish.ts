@@ -87,19 +87,26 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
     throw e;
   }
 
-  await db.from("clip_platforms").upsert(
-    {
-      clip_id: clipId,
-      platform,
-      enabled: true,
-      last_posted_at: new Date().toISOString(),
-      times_posted: (cp?.times_posted || 0) + 1,
-    },
-    { onConflict: "clip_id,platform" }
-  );
-  await db
-    .from("post_log")
-    .insert({ user_id: userId, clip_id: clipId, platform, status: "success", external_post_id: externalId, caption: captionBody });
+  // The platform post already succeeded — bookkeeping failures must never
+  // bubble up, or a retrying caller would publish the same clip twice. Losing
+  // a log row is strictly better than a double post.
+  try {
+    await db.from("clip_platforms").upsert(
+      {
+        clip_id: clipId,
+        platform,
+        enabled: true,
+        last_posted_at: new Date().toISOString(),
+        times_posted: (cp?.times_posted || 0) + 1,
+      },
+      { onConflict: "clip_id,platform" }
+    );
+    await db
+      .from("post_log")
+      .insert({ user_id: userId, clip_id: clipId, platform, status: "success", external_post_id: externalId, caption: captionBody });
+  } catch {
+    // best effort — the post itself is live
+  }
 
   return externalId;
 }

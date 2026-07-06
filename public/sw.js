@@ -15,18 +15,26 @@ self.addEventListener("push", (event) => {
   );
 });
 
+// Take control immediately — navigate() only works on controlled clients.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(clients.claim()));
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || "/";
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+    (async () => {
+      const wins = await clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const w of wins) {
-        if ("focus" in w) {
-          w.navigate(url);
-          return w.focus();
+        try {
+          await w.focus();
+          await w.navigate(url);
+          return;
+        } catch {
+          // uncontrolled client — fall through to opening a fresh window
         }
       }
-      return clients.openWindow(url);
-    })
+      await clients.openWindow(url);
+    })()
   );
 });

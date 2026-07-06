@@ -6,6 +6,7 @@ import React, { useState } from "react";
 // magnet is configured, the pitch names the reward.
 export default function SubscribeForm({ magnetTitle }: { magnetTitle?: string | null }) {
   const [email, setEmail] = useState("");
+  const [hp, setHp] = useState(""); // honeypot — humans never see it, bots fill it
   const [state, setState] = useState<"idle" | "busy" | "done">("idle");
   const [err, setErr] = useState("");
   const [download, setDownload] = useState<{ url: string; title: string } | null>(null);
@@ -19,7 +20,7 @@ export default function SubscribeForm({ magnetTitle }: { magnetTitle?: string | 
       const res = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, name2: "" }),
+        body: JSON.stringify({ email, name2: hp }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -76,6 +77,8 @@ export default function SubscribeForm({ magnetTitle }: { magnetTitle?: string | 
           name="name2"
           tabIndex={-1}
           autoComplete="off"
+          value={hp}
+          onChange={(e) => setHp(e.target.value)}
           style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0 }}
           aria-hidden="true"
         />

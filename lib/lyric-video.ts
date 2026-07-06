@@ -49,24 +49,43 @@ export function parseLyrics(raw: string, duration: number): Line[] {
     .slice(0, 40);
   if (rows.length === 0) return [];
 
-  const stamped = rows.map((r) => {
+  // Parse rows into {at, text}. A stamp-only row ("[0:12]") carries its time
+  // forward to the next unstamped line instead of becoming a phantom entry.
+  const items: { at: number | null; text: string }[] = [];
+  let carryAt: number | null = null;
+  for (const r of rows) {
     const m = r.match(/^\[(\d+):(\d{1,2})\]\s*(.*)$/);
-    return m ? { at: Number(m[1]) * 60 + Number(m[2]), text: m[3] } : { at: null as number | null, text: r };
-  });
-
-  if (stamped.some((s) => s.at != null)) {
-    const lines: Line[] = [];
-    for (let i = 0; i < stamped.length; i++) {
-      const start = stamped[i].at ?? (i === 0 ? 0 : lines[i - 1].end);
-      const nextAt = stamped.slice(i + 1).find((s) => s.at != null)?.at;
-      const end = Math.min(duration, nextAt ?? duration);
-      if (stamped[i].text) lines.push({ text: stamped[i].text, start: Math.min(start, duration), end });
+    const at = m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    const text = m ? m[3].trim() : r;
+    if (!text) {
+      if (at != null) carryAt = at;
+      continue;
     }
-    return lines.filter((l) => l.end > l.start);
+    items.push({ at: at ?? carryAt, text });
+    carryAt = null;
   }
+  if (items.length === 0) return [];
 
-  const slot = duration / rows.length;
-  return rows.map((text, i) => ({ text, start: i * slot, end: (i + 1) * slot }));
+  // Walk runs of lines between stamps: each run splits its interval evenly.
+  // With no stamps at all, the whole lyric is one run across the duration.
+  const lines: Line[] = [];
+  let i = 0;
+  while (i < items.length) {
+    const segStart = Math.min(items[i].at ?? (lines.length ? lines[lines.length - 1].end : 0), duration);
+    let j = i + 1;
+    while (j < items.length && items[j].at == null) j++;
+    const segEnd = Math.min(j < items.length ? Math.max(items[j].at!, segStart) : duration, duration);
+    const slot = (segEnd - segStart) / (j - i);
+    for (let k = i; k < j; k++) {
+      lines.push({
+        text: items[k].text,
+        start: segStart + (k - i) * slot,
+        end: k === j - 1 ? segEnd : segStart + (k - i + 1) * slot,
+      });
+    }
+    i = j;
+  }
+  return lines.filter((l) => l.end > l.start);
 }
 
 function run(args: string[]): Promise<void> {

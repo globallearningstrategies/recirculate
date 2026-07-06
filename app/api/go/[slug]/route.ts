@@ -9,7 +9,10 @@ export const runtime = "nodejs";
 // Public by design — fans hit this.
 export async function GET(req: NextRequest, { params }: { params: { slug: string } }) {
   const url = new URL(req.url);
-  const to = url.searchParams.get("to") ?? "";
+  const toParam = url.searchParams.get("to") ?? "";
+  // Whitelist — a bare object lookup would resolve prototype keys like
+  // "constructor" to truthy junk and crash the redirect.
+  const to = ["spotify", "apple", "youtube"].includes(toParam) ? toParam : "";
   const src = (url.searchParams.get("src") ?? "direct").slice(0, 24);
 
   const { data: song } = await db

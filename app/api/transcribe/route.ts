@@ -35,7 +35,9 @@ export async function POST(req: Request) {
     body = await req.json();
   } catch {}
   const { audioPath } = body;
-  if (!audioPath) return NextResponse.json({ error: "Missing audio file." }, { status: 400 });
+  if (typeof audioPath !== "string" || !audioPath.startsWith(`${user.id}/`)) {
+    return NextResponse.json({ error: "Missing audio file." }, { status: 400 });
+  }
   const start = Math.max(0, Number(body.start) || 0);
   const duration = Math.min(90, Math.max(10, Number(body.duration) || 30));
   const language = ["he", "en", "fr"].includes(body.language) ? body.language : undefined;

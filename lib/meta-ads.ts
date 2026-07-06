@@ -139,16 +139,28 @@ export async function createDraftCampaign(opts: {
   const act = account();
   const title = opts.clip.title || "Recirculate clip";
 
+  // Fail on local preconditions BEFORE creating anything on Meta's side, so a
+  // doomed attempt can't litter the account with orphaned paused campaigns.
+  if (!opts.clip.thumb_path) {
+    throw new Error("This clip has no thumbnail — Meta requires one for video ads. Pick an imported clip or add a thumbnail.");
+  }
+
   // 1. Upload the clip video as an ad video (Meta pulls it from the public URL).
   const videoUrl = db.storage.from(BUCKET).getPublicUrl(opts.clip.video_path).data.publicUrl;
   const vid = await mfetch(`${act}/advideos`, { form: { file_url: videoUrl, name: title } });
   // Wait for processing — creatives can't reference a video that isn't ready.
+  // Throwing here (before the campaign exists) beats timing out into orphans.
+  let videoReady = false;
   for (let i = 0; i < 30; i++) {
     const st = await mfetch(`${vid.id}?fields=status`);
-    if (st?.status?.video_status === "ready") break;
+    if (st?.status?.video_status === "ready") {
+      videoReady = true;
+      break;
+    }
     if (st?.status?.video_status === "error") throw new Error("Meta couldn't process the video.");
     await new Promise((r) => setTimeout(r, 3000));
   }
+  if (!videoReady) throw new Error("Meta is still processing the video — try again in a minute.");
 
   // 2. Campaign (paused).
   const campaign = await mfetch(`${act}/campaigns`, {
@@ -192,9 +204,6 @@ export async function createDraftCampaign(opts: {
   });
 
   // 4. Creative: the clip video, caption, and a Listen Now button to /listen.
-  if (!opts.clip.thumb_path) {
-    throw new Error("This clip has no thumbnail — Meta requires one for video ads. Pick an imported clip or add a thumbnail.");
-  }
   const ig = await igActorId();
   const creative = await mfetch(`${act}/adcreatives`, {
     form: {

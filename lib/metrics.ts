@@ -86,6 +86,7 @@ export async function refreshPostMetrics(
             headers: { Authorization: `Bearer ${token}` },
           })
         ).json();
+        if (res.error) throw new Error(res.error.message || "YouTube stats request failed");
         const stats: Record<string, any> = {};
         for (const item of res.items ?? []) stats[item.id] = item.statistics;
         for (const row of batch) {

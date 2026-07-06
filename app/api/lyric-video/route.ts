@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     body = await req.json();
   } catch {}
   const { songId, audioPath, lyrics } = body;
-  if (!songId || !audioPath || !lyrics?.trim()) {
+  if (!songId || !lyrics?.trim() || typeof audioPath !== "string" || !audioPath.startsWith(`${userId}/`)) {
     return NextResponse.json({ error: "Need a song, an audio file, and lyrics." }, { status: 400 });
   }
   const start = Math.max(0, Number(body.start) || 0);
@@ -69,7 +69,13 @@ export async function POST(req: Request) {
   const thumbPath = `${userId}/thumbs/lyric_${stamp}.jpg`;
   const up1 = await db.storage.from(BUCKET).upload(videoPath, video, { contentType: "video/mp4" });
   if (up1.error) return NextResponse.json({ error: `Upload failed: ${up1.error.message}` }, { status: 500 });
-  await db.storage.from(BUCKET).upload(thumbPath, thumb, { contentType: "image/jpeg" }).catch(() => {});
+  // Only reference the thumb if it actually landed — a clip pointing at a
+  // missing file renders as a broken image instead of falling back.
+  let thumbOk = false;
+  try {
+    const up2 = await db.storage.from(BUCKET).upload(thumbPath, thumb, { contentType: "image/jpeg" });
+    thumbOk = !up2.error;
+  } catch {}
 
   const { data: clip, error: insErr } = await db
     .from("clips")
@@ -79,7 +85,7 @@ export async function POST(req: Request) {
       caption: "",
       hashtags: "",
       video_path: videoPath,
-      thumb_path: thumbPath,
+      thumb_path: thumbOk ? thumbPath : null,
       source: "lyric",
       licensed_audio: !!body.licensedAudio,
       song_id: song.id,
