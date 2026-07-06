@@ -3,6 +3,7 @@ import { publishReel } from "./instagram";
 import { publishYouTube } from "./publishers/youtube";
 import { publishTikTok } from "./publishers/tiktok";
 import { getInstagramToken, getYouTubeToken, getTikTokToken } from "./connections";
+import { youtubeSearchMeta } from "./yt-seo";
 import { cred } from "./env";
 
 // The one publish engine — used by the Publish button (/api/post) and by the
@@ -16,7 +17,7 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
 
   const { data: clip } = await db
     .from("clips")
-    .select("id, user_id, title, caption, hashtags, video_path, songs(slug, spotify_url, apple_url, youtube_url)")
+    .select("id, user_id, title, caption, hashtags, video_path, songs(title, slug, spotify_url, apple_url, youtube_url)")
     .eq("id", clipId)
     .single();
   if (!clip || clip.user_id !== userId) throw new Error("Clip not found.");
@@ -44,7 +45,15 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
       const videoUrl = db.storage.from(BUCKET).getPublicUrl(clip.video_path).data.publicUrl;
       externalId = await publishReel(token, videoUrl, caption);
     } else if (platform === "youtube") {
-      externalId = await publishYouTube(token, clip as any, caption);
+      // Search-optimized title/description/tags — YouTube is a search engine
+      // and covers get typed into it every day. Falls back to the clip's own
+      // metadata if generation fails; SEO never blocks a post.
+      const seo = await youtubeSearchMeta({
+        clipTitle: clip.title ?? "Untitled",
+        songTitle: song?.title ?? null,
+        caption,
+      });
+      externalId = await publishYouTube(token, clip as any, seo?.description ?? caption, seo);
     } else {
       externalId = await publishTikTok(token, clip as any, caption);
     }

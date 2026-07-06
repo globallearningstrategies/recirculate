@@ -7,7 +7,8 @@ import { fileStream } from "../storage";
 export async function publishYouTube(
   token: string,
   clip: { title: string; caption: string; video_path: string },
-  body: string
+  body: string,
+  seo?: { title?: string; tags?: string[] } | null
 ): Promise<string> {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: token });
@@ -17,7 +18,12 @@ export async function publishYouTube(
   const res = await yt.videos.insert({
     part: ["snippet", "status"],
     requestBody: {
-      snippet: { title: clip.title.slice(0, 100), description: body, categoryId: "10" },
+      snippet: {
+        title: (seo?.title || clip.title).slice(0, 100),
+        description: body,
+        categoryId: "10",
+        ...(seo?.tags?.length ? { tags: seo.tags } : {}),
+      },
       status: { privacyStatus: "public", selfDeclaredMadeForKids: false },
     },
     media: { body: media },
