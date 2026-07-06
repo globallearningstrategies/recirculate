@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal, MessageCircle } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal, MessageCircle, Bell } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -144,6 +144,8 @@ export default function RecirculateApp({
   const [lyricSong, setLyricSong] = useState<Song | null>(null);
   // platform → username (null = connected but no display name); key absent = not connected
   const [conns, setConns] = useState<Partial<Record<Platform, string | null>>>({});
+  // Web Push: "prompt" = supported but not yet enabled (show the bell button)
+  const [pushState, setPushState] = useState<"unsupported" | "prompt" | "on" | "denied">("unsupported");
 
   const publicUrl = useCallback(
     (path: string) => supabase.storage.from("clips").getPublicUrl(path).data.publicUrl,
@@ -242,6 +244,65 @@ export default function RecirculateApp({
     const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // ---- Web Push (iOS supports it for installed PWAs) ----
+  const pushSubscribe = useCallback(async () => {
+    const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!key) return false;
+    const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(key.length / 4) * 4, "="));
+    const appKey = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+    const json = sub.toJSON();
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user || !json.endpoint || !json.keys) return false;
+    await supabase
+      .from("push_subscriptions")
+      .upsert(
+        { user_id: u.user.id, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth },
+        { onConflict: "endpoint" }
+      );
+    return true;
+  }, [supabase]);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    ) {
+      return; // stays "unsupported" — the bell simply never shows
+    }
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if (Notification.permission === "granted") {
+      setPushState("on");
+      pushSubscribe().catch(() => {}); // keep the subscription fresh
+    } else if (Notification.permission === "denied") {
+      setPushState("denied");
+    } else {
+      setPushState("prompt");
+    }
+  }, [pushSubscribe]);
+
+  const enablePush = async () => {
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        setPushState(perm === "denied" ? "denied" : "prompt");
+        return;
+      }
+      const ok = await pushSubscribe();
+      setPushState("on");
+      setToast({
+        ok,
+        text: ok ? "Notifications on — you'll get a buzz when something's due. 🔔" : "Enabled, but saving the subscription failed — try again.",
+      });
+    } catch (e: any) {
+      setToast({ ok: false, text: e?.message || "Couldn't enable notifications." });
+    }
+  };
 
   const refreshInbox = useCallback(async () => {
     setInboxBusy(true);
@@ -1026,6 +1087,12 @@ export default function RecirculateApp({
           <button className="rc-step" onClick={() => changeCadence(1)} aria-label="More days">+</button>
           <span>{cadence[plat] === 1 ? "day" : "days"}</span>
         </div>
+
+        {pushState === "prompt" && (
+          <button className="rc-add" style={{ marginBottom: 12 }} onClick={enablePush}>
+            <Bell size={14} /> Notify me when something&apos;s due
+          </button>
+        )}
 
         {duePlats.length >= 2 && (
           <button

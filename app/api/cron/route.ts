@@ -5,6 +5,7 @@ import { getInstagramToken, getYouTubeToken, getTikTokToken } from "@/lib/connec
 import { refreshPostMetrics } from "@/lib/metrics";
 import { publishClipTo } from "@/lib/publish";
 import { adsConfigured, adInsightsLast7d } from "@/lib/meta-ads";
+import { sendPushToOwner } from "@/lib/push";
 import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -164,6 +165,25 @@ export async function GET(req: Request) {
         results.push({ email_error: `Brevo ${res.status}: ${(await res.text()).slice(0, 300)}` });
       }
     }
+  }
+
+  // ---- Push notification: one buzz summarizing the run (when warranted) ----
+  try {
+    const posted = results.filter((r) => r.scheduled && r.posted).length;
+    const bits: string[] = [];
+    if (posted) bits.push(`Posted ${posted} scheduled clip${posted === 1 ? "" : "s"}`);
+    if (due.length) bits.push(`${due.map((d) => NAMES[d.platform]).join(" + ")} due — tap to publish`);
+    if (alerts.length) bits.push(`${alerts.length} connection issue${alerts.length === 1 ? "" : "s"} need attention`);
+    if (bits.length) {
+      const sent = await sendPushToOwner({
+        title: "Recirculate",
+        body: bits.join(" · "),
+        url: cred("APP_BASE_URL") || "https://recirculate-globallearningstrategies-projects.vercel.app",
+      });
+      results.push({ push: sent });
+    }
+  } catch (e: any) {
+    results.push({ push_error: e?.message || "push failed" });
   }
 
   // ---- Sunday scorecard (force=1 also sends it, for testing) ----
