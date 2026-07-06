@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2 } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -87,19 +87,19 @@ export default function RecirculateApp({
   const [editing, setEditing] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [posting, setPosting] = useState<string | null>(null);
-  const [postMsg, setPostMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // One toast for every outcome — publish, import, stats, schedule — fixed
+  // above the nav bar where the thumb already is.
+  const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
+  const [view, setView] = useState<"queue" | "library" | "songs" | "activity">("queue");
+  const [moreId, setMoreId] = useState<string | null>(null); // card with the ⋯ actions open
   const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "never" | "notinrot" | "licensed" | "hits">("all");
   const [statsBusy, setStatsBusy] = useState(false);
-  const [statsMsg, setStatsMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [showLog, setShowLog] = useState(false);
   const [logRows, setLogRows] = useState<any[] | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
   const [clicks, setClicks] = useState<{ song_id: string; target: string }[]>([]);
-  const [showSongs, setShowSongs] = useState(false);
   const [songEditing, setSongEditing] = useState<string | null>(null); // song id | "new" | null
   const [sched, setSched] = useState<{ id: string; clip_id: string; platform: Platform; run_at: string }[]>([]);
   const [schedClip, setSchedClip] = useState<Reel | null>(null); // clip being scheduled to current tab's platform
@@ -199,8 +199,28 @@ export default function RecirculateApp({
 
   // A "Published to Instagram 🎉" banner has no business on the TikTok tab.
   useEffect(() => {
-    setPostMsg(null);
+    setToast(null);
   }, [plat]);
+
+  // Good news dismisses itself; errors stay until replaced or tapped away.
+  useEffect(() => {
+    if (!toast?.ok) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // The Activity view loads its log the first time it's opened.
+  useEffect(() => {
+    if (view !== "activity" || logRows !== null) return;
+    (async () => {
+      const { data } = await supabase
+        .from("post_log")
+        .select("id, platform, posted_at, status, error, views, likes, clips(title)")
+        .order("posted_at", { ascending: false })
+        .limit(25);
+      setLogRows(data ?? []);
+    })();
+  }, [view, logRows, supabase]);
 
   const acc = PLATFORMS[plat];
 
@@ -361,7 +381,7 @@ export default function RecirculateApp({
       : "";
     if (!window.confirm(`Post everything that's due?\n\n${lines}${tiktokNote}\n\nEach posts to your real account.`)) return;
     setPosting("__all");
-    setPostMsg(null);
+    setToast(null);
     const ok: string[] = [];
     const bad: string[] = [];
     for (const d of targets) {
@@ -378,7 +398,7 @@ export default function RecirculateApp({
         bad.push(`${PLATFORMS[d.plat].name}: ${e?.message || "failed"}`);
       }
     }
-    setPostMsg({
+    setToast({
       ok: bad.length === 0,
       text: [ok.length ? `Posted to ${ok.join(" + ")}. 🎉` : "", ...bad].filter(Boolean).join(" · "),
     });
@@ -401,7 +421,7 @@ export default function RecirculateApp({
       .single();
     if (!error && row) {
       setSched((ss) => [...ss, row as any].sort((a, b) => (a.run_at < b.run_at ? -1 : 1)));
-      setPostMsg({ ok: true, text: `Scheduled "${schedClip.title}" for ${PLATFORMS[plat].name} on ${fmt(runAt)} (posts ~10 AM New York).` });
+      setToast({ ok: true, text: `Scheduled "${schedClip.title}" for ${PLATFORMS[plat].name} on ${fmt(runAt)} (posts ~10 AM New York).` });
     }
     setSchedClip(null);
     setSchedDate("");
@@ -439,7 +459,6 @@ export default function RecirculateApp({
   const openPromote = async (r: Reel) => {
     setPromoClip(r);
     setPromoMsg(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
     if (audiences === null) {
       try {
         const res = await fetch("/api/ads/audiences");
@@ -507,30 +526,17 @@ export default function RecirculateApp({
       .upsert(missing.map((r) => ({ clip_id: r.id, platform: k, enabled: true })), { onConflict: "clip_id,platform" });
   };
 
-  const toggleLog = async () => {
-    const next = !showLog;
-    setShowLog(next);
-    if (next && !logRows) {
-      const { data } = await supabase
-        .from("post_log")
-        .select("id, platform, posted_at, status, error, views, likes, clips(title)")
-        .order("posted_at", { ascending: false })
-        .limit(25);
-      setLogRows(data ?? []);
-    }
-  };
-
   // Pull fresh view/like counts from Instagram (originals + reposts) and
   // YouTube. Takes a little while — it's one API call per Instagram media.
   const refreshStats = async () => {
     if (statsBusy) return;
     setStatsBusy(true);
-    setStatsMsg(null);
+    setToast(null);
     try {
       const res = await fetch("/api/metrics/refresh", { method: "POST" });
       const body = await res.json();
       if (!res.ok) {
-        setStatsMsg({ ok: false, text: body?.error || "Stats refresh failed." });
+        setToast({ ok: false, text: body?.error || "Stats refresh failed." });
       } else {
         const bits = [
           `${body.instagram_originals ?? 0} originals`,
@@ -538,7 +544,7 @@ export default function RecirculateApp({
           `${body.youtube_posts ?? 0} Shorts`,
         ];
         const errs = (body.errors ?? []).join(" · ");
-        setStatsMsg({
+        setToast({
           ok: !errs,
           text: `Stats updated: ${bits.join(" · ")}.` + (errs ? ` ${errs}` : ""),
         });
@@ -546,7 +552,7 @@ export default function RecirculateApp({
         await load();
       }
     } catch (e: any) {
-      setStatsMsg({ ok: false, text: e?.message || "Stats refresh failed." });
+      setToast({ ok: false, text: e?.message || "Stats refresh failed." });
     } finally {
       setStatsBusy(false);
     }
@@ -567,7 +573,7 @@ export default function RecirculateApp({
         : "";
     if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${audioNote}${tiktokNote}`)) return;
     setPosting(clip.id);
-    setPostMsg(null);
+    setToast(null);
     try {
       const res = await fetch(`/api/post/${plat}`, {
         method: "POST",
@@ -576,14 +582,14 @@ export default function RecirculateApp({
       });
       const data = await res.json();
       if (!res.ok) {
-        setPostMsg({ ok: false, text: data?.error || "Publish failed." });
+        setToast({ ok: false, text: data?.error || "Publish failed." });
       } else {
-        setPostMsg({ ok: true, text: `Published "${clip.title}" to ${name}. 🎉` });
+        setToast({ ok: true, text: `Published "${clip.title}" to ${name}. 🎉` });
         setLogRows(null); // stale now — refetch on next open
         await load();
       }
     } catch (e: any) {
-      setPostMsg({ ok: false, text: e?.message || "Publish failed." });
+      setToast({ ok: false, text: e?.message || "Publish failed." });
     } finally {
       setPosting(null);
     }
@@ -603,22 +609,22 @@ export default function RecirculateApp({
   const runImport = async () => {
     if (importing) return;
     setImporting(true);
-    setImportMsg(null);
+    setToast(null);
     try {
       const res = await fetch("/api/import/instagram", { method: "POST" });
       const body = await res.json();
       if (!res.ok) {
-        setImportMsg({ ok: false, text: body?.error || "Import failed." });
+        setToast({ ok: false, text: body?.error || "Import failed." });
       } else {
         const { added, skipped, thumbed, failed } = body as { added: number; skipped: number; thumbed?: number; failed?: number };
         const bits = [`Imported ${added} new`, `skipped ${skipped} already in library`];
         if (thumbed) bits.push(`added ${thumbed} thumbnail${thumbed === 1 ? "" : "s"}`);
         if (failed) bits.push(`${failed} failed`);
-        setImportMsg({ ok: true, text: bits.join(" · ") + "." });
+        setToast({ ok: true, text: bits.join(" · ") + "." });
         await load();
       }
     } catch (e: any) {
-      setImportMsg({ ok: false, text: e?.message || "Import failed." });
+      setToast({ ok: false, text: e?.message || "Import failed." });
     } finally {
       setImporting(false);
     }
@@ -778,6 +784,8 @@ export default function RecirculateApp({
           )}
         </div>
 
+        {view === "queue" && (
+          <>
         <div className="rc-cadence">
           <RotateCw size={15} color={acc.b} />
           <span>Repost a {acc.sub} every</span>
@@ -820,9 +828,13 @@ export default function RecirculateApp({
             </div>
           </>
         )}
+          </>
+        )}
 
         {schedClip && (
-          <div className="rc-form" style={{ marginBottom: 12 }}>
+          <div className="rc-sheetwrap" onClick={() => { setSchedClip(null); setSchedDate(""); }}>
+          <div className="rc-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="rc-form" style={{ marginBottom: 0 }}>
             <label className="rc-label" style={{ marginTop: 0 }}>
               Schedule “{schedClip.title}” to {acc.name} on
             </label>
@@ -845,10 +857,14 @@ export default function RecirculateApp({
               </button>
             </div>
           </div>
+          </div>
+          </div>
         )}
 
         {promoClip && (
-          <div className="rc-form" style={{ marginBottom: 12 }}>
+          <div className="rc-sheetwrap" onClick={() => { setPromoClip(null); setPromoMsg(null); }}>
+          <div className="rc-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="rc-form" style={{ marginBottom: 0 }}>
             <label className="rc-label" style={{ marginTop: 0 }}>
               <Megaphone size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
               Promote “{promoClip.title}” — Instagram ad → {promoClip.song_id ? "its song's /listen page" : "the /listen hub"}
@@ -905,8 +921,12 @@ export default function RecirculateApp({
               </div>
             )}
           </div>
+          </div>
+          </div>
         )}
 
+        {view === "queue" && (
+          <>
         {upNext ? (
           <div className={"rc-hero" + (dueNow ? " due" : "")}>
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -952,11 +972,6 @@ export default function RecirculateApp({
                 <Check size={15} /> Mark posted
               </button>
             </div>
-            {postMsg && (
-              <div className={"rc-msg " + (postMsg.ok ? "ok" : "err")} style={{ marginTop: 12 }}>
-                {postMsg.text}
-              </div>
-            )}
           </div>
         ) : (
           <div className="rc-empty">
@@ -981,7 +996,11 @@ export default function RecirculateApp({
             </div>
           </>
         )}
+          </>
+        )}
 
+        {view === "library" && (
+          <>
         <div className="rc-libhead">
           <h2>
             Library {active.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {active.length}</span>}
@@ -1040,12 +1059,6 @@ export default function RecirculateApp({
         <p className="rc-meta" style={{ margin: "0 0 10px" }}>
           Sorted by priority — never-recirculated clips first, then the ones untouched the longest.
         </p>
-
-        {importMsg && (
-          <div className={"rc-msg " + (importMsg.ok ? "ok" : "err")} style={{ marginBottom: 10 }}>
-            {importMsg.text}
-          </div>
-        )}
 
         {editing === "new" && <ReelForm songs={songs} onSave={saveReel} onCancel={() => setEditing(null)} publicUrl={publicUrl} supabase={supabase} />}
 
@@ -1135,61 +1148,54 @@ export default function RecirculateApp({
                     )}
                   </div>
                 )}
+                {moreId === r.id && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                    {r.platforms[plat] && (
+                      <button className="rc-add" onClick={() => { setSchedClip(r); setMoreId(null); }}>
+                        <CalendarClock size={13} /> Schedule
+                      </button>
+                    )}
+                    {r.video_path && (
+                      <button className="rc-add" onClick={() => { openPromote(r); setMoreId(null); }}>
+                        <Megaphone size={13} /> Promote
+                      </button>
+                    )}
+                    {r.video_path && (
+                      <button className="rc-add" onClick={() => shareClip(r)}>
+                        <Share2 size={13} /> Share
+                      </button>
+                    )}
+                    <button className="rc-add" onClick={() => { setEditing(r.id); setMoreId(null); }}>
+                      <Pencil size={13} /> Edit
+                    </button>
+                    <button className="rc-add" onClick={() => { setArchived(r, true); setMoreId(null); }}>
+                      <Archive size={13} /> Archive
+                    </button>
+                    <button className="rc-add" onClick={() => remove(r)}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  </div>
+                )}
               </div>
               {r.platforms[plat] && (
-                <>
-                  <button
-                    className="rc-icbtn"
-                    onClick={() => publishClip(r)}
-                    disabled={posting === r.id}
-                    aria-label={`Publish to ${acc.name} now`}
-                    title={`Publish to ${acc.name} now`}
-                  >
-                    <Send size={15} />
-                  </button>
-                  <button
-                    className="rc-icbtn"
-                    onClick={() => { setSchedClip(r); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                    aria-label={`Schedule for ${acc.name}`}
-                    title={`Schedule for ${acc.name} — posts on the chosen morning's run`}
-                  >
-                    <CalendarClock size={15} />
-                  </button>
-                </>
+                <button
+                  className="rc-icbtn"
+                  onClick={() => publishClip(r)}
+                  disabled={posting === r.id}
+                  aria-label={`Publish to ${acc.name} now`}
+                  title={`Publish to ${acc.name} now`}
+                >
+                  <Send size={15} />
+                </button>
               )}
-              {r.video_path && (
-                <>
-                  <button
-                    className="rc-icbtn"
-                    onClick={() => openPromote(r)}
-                    aria-label="Promote with a Meta ad"
-                    title="Promote — create a paused Instagram ad driving to /listen"
-                  >
-                    <Megaphone size={15} />
-                  </button>
-                  <button
-                    className="rc-icbtn"
-                    onClick={() => shareClip(r)}
-                    aria-label="Share the video file"
-                    title="Share the video file — post it anywhere (e.g. your other Instagram)"
-                  >
-                    <Share2 size={15} />
-                  </button>
-                </>
-              )}
-              <button className="rc-icbtn" onClick={() => setEditing(r.id)} aria-label="Edit">
-                <Pencil size={15} />
-              </button>
               <button
                 className="rc-icbtn"
-                onClick={() => setArchived(r, true)}
-                aria-label="Archive — keep the clip but never reshare it"
-                title="Archive — keep the clip but never reshare it"
+                onClick={() => setMoreId(moreId === r.id ? null : r.id)}
+                aria-label="More actions"
+                title="More actions"
+                style={moreId === r.id ? { color: "var(--text)" } : {}}
               >
-                <Archive size={15} />
-              </button>
-              <button className="rc-icbtn" onClick={() => remove(r)} aria-label="Delete">
-                <Trash2 size={15} />
+                <MoreHorizontal size={17} />
               </button>
             </div>
           )
@@ -1234,37 +1240,34 @@ export default function RecirculateApp({
           </>
         )}
 
-        <button
-          className="rc-add"
-          style={{ marginTop: 14, marginRight: 8 }}
-          onClick={refreshStats}
-          disabled={statsBusy}
-          title="Pull view/like counts from Instagram and YouTube"
-        >
-          <RotateCw size={14} /> {statsBusy ? "Refreshing stats…" : "Refresh stats"}
-        </button>
-        <button className="rc-add" style={{ marginTop: 14, marginRight: 8 }} onClick={() => setShowSongs((v) => !v)}>
-          <Music size={14} /> {showSongs ? "Hide" : "Show"} songs &amp; links{songs.length ? ` · ${songs.length}` : ""}
-        </button>
-        {statsMsg && (
-          <div className={"rc-msg " + (statsMsg.ok ? "ok" : "err")} style={{ marginTop: 10 }}>
-            {statsMsg.text}
-          </div>
+          </>
         )}
-        {showSongs && (
-          <div style={{ marginTop: 10 }}>
-            {lyricSong && (
+
+        {lyricSong && (
+          <div className="rc-sheetwrap" onClick={() => setLyricSong(null)}>
+            <div className="rc-sheet" onClick={(e) => e.stopPropagation()}>
               <LyricVideoForm
                 song={lyricSong}
                 supabase={supabase}
                 onCancel={() => setLyricSong(null)}
                 onDone={async (text) => {
                   setLyricSong(null);
-                  setImportMsg({ ok: true, text });
+                  setToast({ ok: true, text });
                   await load();
                 }}
               />
-            )}
+            </div>
+          </div>
+        )}
+
+        {view === "songs" && (
+          <div style={{ marginTop: 4 }}>
+            <div className="rc-libhead">
+              <h2>Songs {songs.length > 0 && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {songs.length}</span>}</h2>
+              <a className="rc-add" href="/listen" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+                /listen ↗
+              </a>
+            </div>
             {songEditing === "new" ? (
               <SongForm onSave={saveSong} onCancel={() => setSongEditing(null)} />
             ) : (
@@ -1328,11 +1331,19 @@ export default function RecirculateApp({
           </div>
         )}
 
-        <button className="rc-add" style={{ marginTop: 14 }} onClick={toggleLog}>
-          <History size={14} /> {showLog ? "Hide" : "Show"} activity
-        </button>
-        {showLog && (
-          <div style={{ marginTop: 10 }}>
+        {view === "activity" && (
+          <div style={{ marginTop: 4 }}>
+            <div className="rc-libhead">
+              <h2>Activity</h2>
+              <button
+                className="rc-add"
+                onClick={refreshStats}
+                disabled={statsBusy}
+                title="Pull view/like counts from Instagram and YouTube"
+              >
+                <RotateCw size={14} /> {statsBusy ? "Refreshing…" : "Refresh stats"}
+              </button>
+            </div>
             {logRows === null ? (
               <div className="rc-empty">Loading…</div>
             ) : logRows.length === 0 ? (
@@ -1356,6 +1367,39 @@ export default function RecirculateApp({
             )}
           </div>
         )}
+
+        {toast && (
+          <div
+            className={"rc-msg rc-toast " + (toast.ok ? "ok" : "err")}
+            onClick={() => setToast(null)}
+            role="status"
+            style={{ cursor: "pointer" }}
+          >
+            {toast.text}
+          </div>
+        )}
+
+        <nav className="rc-nav" aria-label="Sections">
+          {(
+            [
+              ["queue", "Queue", Clock, duePlats.length > 0],
+              ["library", "Library", LayoutGrid, false],
+              ["songs", "Songs", Music, false],
+              ["activity", "Activity", History, false],
+            ] as const
+          ).map(([key, label, IconC, dot]) => (
+            <button
+              key={key}
+              className={"rc-navbtn" + (view === key ? " on" : "")}
+              onClick={() => setView(key)}
+              aria-label={label}
+            >
+              {dot && <span className="rc-navdot" />}
+              <IconC size={19} />
+              {label}
+            </button>
+          ))}
+        </nav>
       </div>
     </div>
   );

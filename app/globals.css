@@ -95,3 +95,19 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
 .rc-msg{font-size:13px;line-height:1.5;margin-top:14px;padding:11px 13px;border-radius:11px;border:1px solid var(--line)}
 .rc-msg.ok{color:#C9F7D8;background:rgba(80,200,120,.10);border-color:rgba(80,200,120,.35)}
 .rc-msg.err{color:#FFC9D2;background:rgba(255,92,122,.10);border-color:rgba(255,92,122,.4)}
+
+/* ---- app sections: bottom tab bar, sheets, toasts ---- */
+.rc-nav{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;justify-content:space-around;gap:2px;
+  background:rgba(21,16,27,.94);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+.rc-navbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;border:none;background:transparent;
+  color:var(--muted);font-family:inherit;font-size:10.5px;font-weight:600;padding:6px 2px;border-radius:10px;cursor:pointer;position:relative}
+.rc-navbtn.on{color:var(--text)}
+.rc-navdot{position:absolute;top:4px;right:calc(50% - 16px);width:7px;height:7px;border-radius:99px;background:var(--acc-a)}
+.rc-wrap{padding-bottom:96px}
+.rc-sheetwrap{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+.rc-sheet{width:100%;max-width:560px;max-height:82vh;overflow-y:auto;background:var(--bg2);border:1px solid var(--line);
+  border-bottom:none;border-radius:20px 20px 0 0;padding:16px 16px calc(18px + env(safe-area-inset-bottom))}
+.rc-sheet .rc-form{background:transparent;border:none;padding:0;margin:0}
+.rc-toast{position:fixed;left:12px;right:12px;bottom:calc(70px + env(safe-area-inset-bottom));z-index:60;max-width:560px;margin:0 auto;
+  box-shadow:0 8px 30px rgba(0,0,0,.45)}
