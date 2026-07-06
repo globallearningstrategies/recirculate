@@ -417,6 +417,8 @@ export default function RecirculateApp({
   const sinceLast = globalLast ? daysBetween(globalLast, todayISO()) : null;
   const dueNow = !globalLast || (sinceLast as number) >= cadence[plat];
   const daysLeft = globalLast ? Math.max(0, cadence[plat] - (sinceLast as number)) : 0;
+  // The actual due date — shown alongside the countdown so the math is checkable.
+  const dueDate = globalLast ? new Date(+new Date(globalLast) + cadence[plat] * 86400000).toISOString() : todayISO();
 
   // Cross-platform due map for the tab dots and the "post all due" button —
   // the same rotation rule as above, evaluated for every platform.
@@ -1107,6 +1109,12 @@ export default function RecirculateApp({
           <span>{cadence[plat] === 1 ? "day" : "days"}</span>
         </div>
 
+        <p className="rc-meta" style={{ margin: "-8px 4px 14px" }}>
+          {globalLast
+            ? `Last ${acc.name} post: ${fmtDT(globalLast)} · next due: ${dueNow ? "now" : fmt(dueDate)}`
+            : `Nothing posted to ${acc.name} yet — the rotation is due now.`}
+        </p>
+
         {pushState === "prompt" && (
           <button className="rc-add" style={{ marginBottom: 12 }} onClick={enablePush}>
             <Bell size={14} /> Notify me when something&apos;s due
@@ -1272,7 +1280,7 @@ export default function RecirculateApp({
               </span>
               <span className="rc-status">
                 <Clock size={12} />
-                {dueNow ? "Ready to post now" : `Due in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`}
+                {dueNow ? "Ready to post now" : `Due ${fmt(dueDate)}`}
               </span>
             </div>
             <div className="rc-title">{upNext.title}</div>
