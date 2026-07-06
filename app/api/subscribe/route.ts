@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { db, BUCKET } from "@/lib/supabase";
 import { cred } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -33,8 +34,22 @@ export async function POST(req: Request) {
     }),
   });
 
-  if (res.ok || res.status === 204) return NextResponse.json({ ok: true });
+  if (res.ok || res.status === 204) return NextResponse.json({ ok: true, ...(await magnet()) });
   const err = await res.json().catch(() => ({} as any));
-  if (err?.code === "duplicate_parameter") return NextResponse.json({ ok: true });
+  if (err?.code === "duplicate_parameter") return NextResponse.json({ ok: true, ...(await magnet()) });
   return NextResponse.json({ error: "Couldn't sign you up — try again in a minute." }, { status: 502 });
+}
+
+// The reward for signing up, when one is configured (Songs tab → Lead magnet).
+async function magnet(): Promise<{ download?: string; downloadTitle?: string }> {
+  try {
+    const { data } = await db.from("lead_magnet").select("title, file_path").limit(1).maybeSingle();
+    if (!data) return {};
+    return {
+      download: db.storage.from(BUCKET).getPublicUrl(data.file_path).data.publicUrl,
+      downloadTitle: data.title,
+    };
+  } catch {
+    return {};
+  }
 }

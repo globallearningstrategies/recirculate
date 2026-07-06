@@ -24,11 +24,10 @@ export default async function SongPage({
   params: { slug: string };
   searchParams?: { src?: string };
 }) {
-  const { data: song } = await db
-    .from("songs")
-    .select("title, slug, spotify_url, apple_url, youtube_url")
-    .eq("slug", params.slug)
-    .maybeSingle();
+  const [{ data: song }, { data: magnet }] = await Promise.all([
+    db.from("songs").select("title, slug, spotify_url, apple_url, youtube_url").eq("slug", params.slug).maybeSingle(),
+    db.from("lead_magnet").select("title").limit(1).maybeSingle(),
+  ]);
 
   const src = searchParams?.src ? `&src=${encodeURIComponent(searchParams.src)}` : "";
   const targets = song
@@ -76,7 +75,7 @@ export default async function SongPage({
                 </a>
               ))}
             </div>
-            <SubscribeForm />
+            <SubscribeForm magnetTitle={magnet?.title ?? null} />
             <p className="rc-sub" style={{ marginTop: 18, fontSize: 12 }}>
               <Link href="/listen" style={{ color: "var(--muted)" }}>More songs</Link>
             </p>

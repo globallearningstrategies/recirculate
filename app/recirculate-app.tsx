@@ -51,6 +51,16 @@ type Song = {
   campaign_until: string | null;
 };
 
+type Curator = {
+  id: string;
+  name: string;
+  contact_email: string;
+  playlist_url: string;
+  note: string;
+  status: string; // new | pitched | placed | passed
+  last_contact: string | null;
+};
+
 const DEFAULT_CADENCE: Cadence = { instagram: 5, tiktok: 4, youtube: 7 };
 const todayISO = () => new Date().toISOString();
 const daysBetween = (a: string, b: string) => Math.floor((+new Date(b) - +new Date(a)) / 86400000);
@@ -116,8 +126,18 @@ export default function RecirculateApp({
   const [promoClip, setPromoClip] = useState<Reel | null>(null);
   const [promoBudget, setPromoBudget] = useState("10");
   const [promoDays, setPromoDays] = useState("7");
-  const [promoAudience, setPromoAudience] = useState("");
-  const [audiences, setAudiences] = useState<{ id: string; name: string }[] | null>(null);
+  const [promoAudience, setPromoAudience] = useState(""); // "kind:id"
+  const [audiences, setAudiences] = useState<{ id: string; name: string; kind: "saved" | "custom" }[] | null>(null);
+  const [lalCountry, setLalCountry] = useState("US");
+  const [lalBusy, setLalBusy] = useState(false);
+  // Lead magnet + curator outreach
+  const [magnet, setMagnet] = useState<{ id: string; title: string; file_path: string } | null>(null);
+  const [curators, setCurators] = useState<Curator[]>([]);
+  const [pitchCurator, setPitchCurator] = useState<Curator | null>(null);
+  const [pitchSongId, setPitchSongId] = useState("");
+  const [pitchSubject, setPitchSubject] = useState("");
+  const [pitchBody, setPitchBody] = useState("");
+  const [pitchBusy, setPitchBusy] = useState<"draft" | "send" | null>(null);
   const [adsConfigured, setAdsConfigured] = useState<boolean | null>(null);
   const [promoBusy, setPromoBusy] = useState(false);
   const [promoMsg, setPromoMsg] = useState<{ ok: boolean; text: string; url?: string } | null>(null);
@@ -148,6 +168,10 @@ export default function RecirculateApp({
       .select("id, clip_id, platform, run_at")
       .eq("status", "pending")
       .order("run_at", { ascending: true });
+    const [{ data: magnetRow }, { data: curatorRows }] = await Promise.all([
+      supabase.from("lead_magnet").select("id, title, file_path").limit(1).maybeSingle(),
+      supabase.from("curators").select("*").order("created_at", { ascending: false }),
+    ]);
 
     const mapped: Reel[] = (clipRows ?? []).map((c: any) => {
       const byPlat: Record<string, any> = {};
@@ -198,6 +222,8 @@ export default function RecirculateApp({
     setSongs((songRows as Song[]) ?? []);
     setClicks((clickRows as { song_id: string; target: string }[]) ?? []);
     setSched((schedRows as any[]) ?? []);
+    setMagnet((magnetRow as any) ?? null);
+    setCurators((curatorRows as Curator[]) ?? []);
     setLoaded(true);
   }, [supabase]);
 
@@ -501,12 +527,39 @@ export default function RecirculateApp({
     }
   };
 
+  // "People like my fans": engagement audience → 1% lookalike, then refresh
+  // the dropdown so it's immediately pickable.
+  const buildLookalike = async () => {
+    if (lalBusy) return;
+    setLalBusy(true);
+    try {
+      const res = await fetch("/api/ads/lookalike", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: lalCountry }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setPromoMsg({ ok: false, text: body?.error || "Lookalike creation failed." });
+      } else {
+        setPromoMsg({ ok: true, text: `"${body.name}" created — it may take a few hours to fill, but you can target it now.` });
+        const a = await (await fetch("/api/ads/audiences")).json().catch(() => null);
+        if (a?.audiences) setAudiences(a.audiences);
+      }
+    } catch (e: any) {
+      setPromoMsg({ ok: false, text: e?.message || "Lookalike creation failed." });
+    } finally {
+      setLalBusy(false);
+    }
+  };
+
   // Creates the PAUSED campaign — money only moves after review in Ads Manager.
   const confirmPromote = async () => {
     if (!promoClip || promoBusy) return;
     setPromoBusy(true);
     setPromoMsg(null);
     try {
+      const [kind, id] = promoAudience.includes(":") ? promoAudience.split(":", 2) : ["", ""];
       const res = await fetch("/api/ads/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -514,7 +567,8 @@ export default function RecirculateApp({
           clipId: promoClip.id,
           dailyBudget: Number(promoBudget),
           days: Number(promoDays),
-          audienceId: promoAudience || null,
+          audienceId: id || null,
+          audienceKind: kind || null,
         }),
       });
       const body = await res.json();
@@ -774,6 +828,110 @@ export default function RecirculateApp({
     await supabase.from("songs").delete().eq("id", s.id);
   };
 
+  // Lead magnet: one bonus track, gated behind the /listen email form.
+  const saveMagnet = async (title: string, file: File) => {
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) return;
+    const ext = (file.name.split(".").pop() || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const key = `${u.user.id}/magnet/${Date.now()}.${ext}`;
+    const up = await supabase.storage.from("clips").upload(key, file, { contentType: file.type || "audio/mpeg" });
+    if (up.error) {
+      setToast({ ok: false, text: "Upload failed: " + up.error.message });
+      return;
+    }
+    if (magnet) {
+      await supabase.storage.from("clips").remove([magnet.file_path]).catch(() => {});
+      await supabase.from("lead_magnet").delete().eq("id", magnet.id);
+    }
+    const { data: row } = await supabase
+      .from("lead_magnet")
+      .insert({ user_id: u.user.id, title: title.trim(), file_path: key })
+      .select("id, title, file_path")
+      .single();
+    setMagnet((row as any) ?? null);
+    setToast({ ok: true, text: `Lead magnet live — /listen now trades "${title.trim()}" for an email.` });
+  };
+
+  const removeMagnet = async () => {
+    if (!magnet || !window.confirm(`Remove "${magnet.title}"? The /listen form goes back to a plain signup.`)) return;
+    await supabase.storage.from("clips").remove([magnet.file_path]).catch(() => {});
+    await supabase.from("lead_magnet").delete().eq("id", magnet.id);
+    setMagnet(null);
+  };
+
+  // Curator outreach
+  const addCurator = async (c: { name: string; contact_email: string; playlist_url: string; note: string }) => {
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user || !c.name.trim()) return;
+    const { data: row } = await supabase
+      .from("curators")
+      .insert({ user_id: u.user.id, ...c, name: c.name.trim() })
+      .select("*")
+      .single();
+    if (row) setCurators((cs) => [row as Curator, ...cs]);
+  };
+
+  const setCuratorStatus = async (id: string, status: string) => {
+    setCurators((cs) => cs.map((c) => (c.id === id ? { ...c, status } : c)));
+    await supabase.from("curators").update({ status }).eq("id", id);
+  };
+
+  const deleteCurator = async (c: Curator) => {
+    if (!window.confirm(`Remove ${c.name} from outreach?`)) return;
+    setCurators((cs) => cs.filter((x) => x.id !== c.id));
+    await supabase.from("curators").delete().eq("id", c.id);
+  };
+
+  const draftPitch = async () => {
+    if (!pitchCurator || pitchBusy) return;
+    setPitchBusy("draft");
+    try {
+      const res = await fetch("/api/outreach/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ curatorId: pitchCurator.id, songId: pitchSongId || null }),
+      });
+      const body = await res.json();
+      if (!res.ok) setToast({ ok: false, text: body?.error || "Draft failed." });
+      else {
+        setPitchSubject(body.subject);
+        setPitchBody(body.body);
+      }
+    } catch (e: any) {
+      setToast({ ok: false, text: e?.message || "Draft failed." });
+    } finally {
+      setPitchBusy(null);
+    }
+  };
+
+  const sendPitch = async () => {
+    if (!pitchCurator || pitchBusy || !pitchSubject.trim() || !pitchBody.trim()) return;
+    setPitchBusy("send");
+    try {
+      const res = await fetch("/api/outreach/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ curatorId: pitchCurator.id, subject: pitchSubject.trim(), text: pitchBody.trim() }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setToast({ ok: false, text: body?.error || "Send failed." });
+      } else {
+        setToast({ ok: true, text: `Pitch sent to ${pitchCurator.name}. 🤞 Follow-up nudges land in your daily email.` });
+        setCurators((cs) =>
+          cs.map((c) => (c.id === pitchCurator.id ? { ...c, status: "pitched", last_contact: new Date().toISOString() } : c))
+        );
+        setPitchCurator(null);
+        setPitchSubject("");
+        setPitchBody("");
+      }
+    } catch (e: any) {
+      setToast({ ok: false, text: e?.message || "Send failed." });
+    } finally {
+      setPitchBusy(null);
+    }
+  };
+
   const songClicks = (songId: string) => {
     const rows = clicks.filter((c) => c.song_id === songId);
     const by = (t: string) => rows.filter((c) => c.target === t).length;
@@ -964,9 +1122,27 @@ export default function RecirculateApp({
                 <select className="rc-input" value={promoAudience} onChange={(e) => setPromoAudience(e.target.value)}>
                   <option value="">Automatic (US, 18+, Instagram)</option>
                   {(audiences ?? []).map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
+                    <option key={a.id} value={`${a.kind}:${a.id}`}>{a.name}</option>
                   ))}
                 </select>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                  <button className="rc-add" onClick={buildLookalike} disabled={lalBusy} title="Custom audience of your IG engagers → 1% lookalike in the chosen country">
+                    <Sparkles size={13} /> {lalBusy ? "Building…" : "Build fan lookalike"}
+                  </button>
+                  <select
+                    className="rc-input"
+                    style={{ width: "auto", padding: "6px 10px", fontSize: 12.5 }}
+                    value={lalCountry}
+                    onChange={(e) => setLalCountry(e.target.value)}
+                    aria-label="Lookalike country"
+                  >
+                    <option value="US">USA</option>
+                    <option value="IL">Israel</option>
+                    <option value="CA">Canada</option>
+                    <option value="GB">UK</option>
+                    <option value="FR">France</option>
+                  </select>
+                </div>
                 <p className="rc-note">
                   Max spend ≈ ${(Number(promoBudget) || 0) * (Number(promoDays) || 0)} · created <b>paused</b> — you review
                   and publish in Ads Manager.
@@ -1402,6 +1578,113 @@ export default function RecirculateApp({
                 </div>
               )
             )}
+
+            <div className="rc-deck-label" style={{ margin: "18px 0 8px" }}>Lead magnet</div>
+            {magnet ? (
+              <div className="rc-card" style={{ alignItems: "center" }}>
+                <Download size={16} color="var(--lilac)" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p className="rc-cardtitle">{magnet.title}</p>
+                  <p className="rc-meta" style={{ margin: "3px 0 0" }}>
+                    /listen trades this download for a fan&apos;s email.
+                  </p>
+                </div>
+                <button className="rc-icbtn" onClick={removeMagnet} aria-label="Remove lead magnet">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ) : (
+              <MagnetForm onSave={saveMagnet} />
+            )}
+
+            <div className="rc-deck-label" style={{ margin: "18px 0 8px" }}>Playlist outreach</div>
+            <CuratorForm onAdd={addCurator} />
+            {curators.length === 0 && (
+              <div className="rc-empty" style={{ marginTop: 8 }}>
+                Add playlist curators you find (SubmitHub, playlist descriptions, Instagram bios) — draft a
+                personal pitch with ✨ and send it from here. Follow-up nudges land in your daily email.
+              </div>
+            )}
+            {curators.map((c) => (
+              <div key={c.id} className="rc-card" style={{ alignItems: "center" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p className="rc-cardtitle">
+                    {c.name}
+                    <span
+                      className={"rc-tag-chip" + (c.status === "placed" ? "" : c.status === "pitched" ? " warn" : "")}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {c.status}
+                      {c.status === "pitched" && c.last_contact ? ` ${fmt(c.last_contact)}` : ""}
+                    </span>
+                  </p>
+                  <p className="rc-meta" style={{ margin: "3px 0 0" }}>
+                    {[c.contact_email, c.playlist_url ? "playlist ↗" : "", c.note].filter(Boolean).join(" · ") || "no details yet"}
+                  </p>
+                </div>
+                {c.status === "pitched" && (
+                  <>
+                    <button className="rc-icbtn" onClick={() => setCuratorStatus(c.id, "placed")} title="Mark placed 🎉" aria-label="Mark placed">
+                      <Check size={15} />
+                    </button>
+                    <button className="rc-icbtn" onClick={() => setCuratorStatus(c.id, "passed")} title="Mark passed" aria-label="Mark passed">
+                      <X size={15} />
+                    </button>
+                  </>
+                )}
+                <button
+                  className="rc-icbtn"
+                  onClick={() => { setPitchCurator(c); setPitchSongId(songs[0]?.id ?? ""); setPitchSubject(""); setPitchBody(""); }}
+                  title="Draft & send a pitch"
+                  aria-label="Pitch"
+                >
+                  <Send size={15} />
+                </button>
+                <button className="rc-icbtn" onClick={() => deleteCurator(c)} aria-label="Delete curator">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {pitchCurator && (
+          <div className="rc-sheetwrap" onClick={() => setPitchCurator(null)}>
+            <div className="rc-sheet" onClick={(e) => e.stopPropagation()}>
+              <label className="rc-label" style={{ marginTop: 0 }}>
+                <Send size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                Pitch {pitchCurator.name}
+                {pitchCurator.contact_email ? ` · ${pitchCurator.contact_email}` : " — ⚠ no email saved"}
+              </label>
+              <label className="rc-label">Song to pitch</label>
+              <select className="rc-input" value={pitchSongId} onChange={(e) => setPitchSongId(e.target.value)}>
+                <option value="">— the artist in general —</option>
+                {songs.map((s) => (
+                  <option key={s.id} value={s.id}>{s.title}</option>
+                ))}
+              </select>
+              <div style={{ marginTop: 10 }}>
+                <button className="rc-add" onClick={draftPitch} disabled={pitchBusy !== null}>
+                  <Sparkles size={13} /> {pitchBusy === "draft" ? "Drafting…" : "Draft pitch"}
+                </button>
+              </div>
+              <label className="rc-label">Subject</label>
+              <input className="rc-input" value={pitchSubject} onChange={(e) => setPitchSubject(e.target.value)} placeholder="Draft one with ✨ or write your own" />
+              <label className="rc-label">Email</label>
+              <textarea className="rc-area" rows={8} value={pitchBody} onChange={(e) => setPitchBody(e.target.value)} />
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button
+                  className="rc-btn primary"
+                  onClick={sendPitch}
+                  disabled={pitchBusy !== null || !pitchSubject.trim() || !pitchBody.trim() || !pitchCurator.contact_email}
+                >
+                  <Send size={15} /> {pitchBusy === "send" ? "Sending…" : "Send pitch"}
+                </button>
+                <button className="rc-btn ghost" onClick={() => setPitchCurator(null)}>
+                  <X size={15} /> Close
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1968,6 +2251,92 @@ function LyricVideoForm({
       {err && (
         <div className="rc-msg err" style={{ marginTop: 10 }}>{err}</div>
       )}
+    </div>
+  );
+}
+
+function MagnetForm({ onSave }: { onSave: (title: string, file: File) => Promise<void> }) {
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="rc-form">
+      <p className="rc-note" style={{ marginTop: 0 }}>
+        Offer a bonus track (unreleased, acoustic, live) as a free download for joining the mailing list —
+        it typically doubles signups on /listen.
+      </p>
+      <label className="rc-label">What fans get</label>
+      <input className="rc-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Hallelujah — unreleased acoustic version" />
+      <label className="rc-label">Audio file</label>
+      <div className="rc-file">
+        <input type="file" accept="audio/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button
+          className="rc-btn primary"
+          disabled={busy || !title.trim() || !file}
+          onClick={async () => {
+            if (!file) return;
+            setBusy(true);
+            try {
+              await onSave(title, file);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <Download size={15} /> {busy ? "Uploading…" : "Set lead magnet"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CuratorForm({ onAdd }: { onAdd: (c: { name: string; contact_email: string; playlist_url: string; note: string }) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!open) {
+    return (
+      <button className="rc-add" onClick={() => setOpen(true)}>
+        <Plus size={14} /> Add curator
+      </button>
+    );
+  }
+  return (
+    <div className="rc-form">
+      <label className="rc-label" style={{ marginTop: 0 }}>Curator / playlist name</label>
+      <input className="rc-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Shabbat Vibes playlist" />
+      <label className="rc-label">Contact email</label>
+      <input className="rc-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="curator@email.com" />
+      <label className="rc-label">Playlist link</label>
+      <input className="rc-input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://open.spotify.com/playlist/…" />
+      <label className="rc-label">Notes (what the playlist is about — feeds the pitch draft)</label>
+      <input className="rc-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. acoustic Jewish music, ~40k followers, likes intimate covers" />
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button
+          className="rc-btn primary"
+          disabled={busy || !name.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await onAdd({ name, contact_email: email.trim(), playlist_url: url.trim(), note: note.trim() });
+              setName(""); setEmail(""); setUrl(""); setNote("");
+              setOpen(false);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <Check size={15} /> Save curator
+        </button>
+        <button className="rc-btn ghost" onClick={() => setOpen(false)}>
+          <X size={15} /> Cancel
+        </button>
+      </div>
     </div>
   );
 }

@@ -288,3 +288,36 @@ alter table scheduled_posts enable row level security;
 drop policy if exists "own scheduled_posts" on scheduled_posts;
 create policy "own scheduled_posts" on scheduled_posts for all
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- Growth stack: caption memory, lead magnet, curator outreach
+-- ---------------------------------------------------------------------------
+alter table post_log add column if not exists caption text;
+
+create table if not exists lead_magnet (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  title text not null,
+  file_path text not null,
+  created_at timestamptz default now()
+);
+alter table lead_magnet enable row level security;
+drop policy if exists "own lead_magnet" on lead_magnet;
+create policy "own lead_magnet" on lead_magnet for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+create table if not exists curators (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null,
+  contact_email text default '',
+  playlist_url text default '',
+  note text default '',
+  status text not null default 'new',   -- new | pitched | placed | passed
+  last_contact timestamptz,
+  created_at timestamptz default now()
+);
+alter table curators enable row level security;
+drop policy if exists "own curators" on curators;
+create policy "own curators" on curators for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());

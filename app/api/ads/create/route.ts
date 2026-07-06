@@ -61,7 +61,10 @@ export async function POST(req: Request) {
       listenUrl,
       dailyBudgetCents: Math.round(dailyBudget * 100),
       days,
-      savedAudienceId: body?.audienceId || null,
+      audience:
+        body?.audienceId && (body?.audienceKind === "saved" || body?.audienceKind === "custom")
+          ? { kind: body.audienceKind, id: body.audienceId }
+          : null,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {

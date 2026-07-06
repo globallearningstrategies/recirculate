@@ -124,6 +124,23 @@ export async function GET(req: Request) {
           ? `<p style="margin:0 0 12px;color:#555">Nothing posts until you tap Publish.</p>` +
             `<ul style="padding-left:20px">${items}</ul>`
           : "";
+      // Outreach follow-ups: curators pitched 5+ days ago with no status change.
+      let followBlock = "";
+      try {
+        const cutoff5 = new Date(Date.now() - 5 * 86400000).toISOString();
+        const { data: stale } = await db
+          .from("curators")
+          .select("name")
+          .eq("status", "pitched")
+          .lt("last_contact", cutoff5)
+          .limit(10);
+        if (stale?.length) {
+          followBlock =
+            `<h3 style="margin:16px 0 4px">Playlist follow-ups</h3>` +
+            `<p style="color:#555;margin:0 0 4px">Pitched 5+ days ago, no reply logged:</p>` +
+            `<ul style="padding-left:20px">${stale.map((c) => `<li style="margin:4px 0">${c.name}</li>`).join("")}</ul>`;
+        }
+      } catch {}
       const res = await fetch("https://api.brevo.com/v3/smtp/email", {
         method: "POST",
         headers: { "api-key": apiKey, "Content-Type": "application/json" },
@@ -136,6 +153,7 @@ export async function GET(req: Request) {
             `<h2 style="margin:0 0 4px">${due.length > 0 ? "Ready to recirculate" : "Recirculate health check"}</h2>` +
             dueBlock +
             alertBlock +
+            followBlock +
             `<p><a href="${appUrl}" style="display:inline-block;background:#111;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">${due.length > 0 ? "Review &amp; publish" : "Open Recirculate"}</a></p>` +
             `</div>`,
         }),

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase-server";
-import { adsConfigured, listSavedAudiences } from "@/lib/meta-ads";
+import { adsConfigured, listAudiences } from "@/lib/meta-ads";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,7 @@ export async function GET() {
     return NextResponse.json({ configured: false, audiences: [] });
   }
   try {
-    const audiences = await listSavedAudiences();
+    const audiences = await listAudiences();
     return NextResponse.json({ configured: true, audiences });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || "Couldn't load audiences." }, { status: 502 });

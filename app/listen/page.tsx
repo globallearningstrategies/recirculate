@@ -12,10 +12,10 @@ export const metadata = {
 };
 
 export default async function ListenHub() {
-  const { data: songs } = await db
-    .from("songs")
-    .select("title, slug")
-    .order("created_at", { ascending: false });
+  const [{ data: songs }, { data: magnet }] = await Promise.all([
+    db.from("songs").select("title, slug").order("created_at", { ascending: false }),
+    db.from("lead_magnet").select("title").limit(1).maybeSingle(),
+  ]);
 
   return (
     <div className="rc-login" style={{ alignItems: "flex-start", paddingTop: 48 }}>
@@ -44,7 +44,7 @@ export default async function ListenHub() {
             </Link>
           ))}
         </div>
-        <SubscribeForm />
+        <SubscribeForm magnetTitle={magnet?.title ?? null} />
       </div>
     </div>
   );

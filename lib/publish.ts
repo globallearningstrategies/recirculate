@@ -4,6 +4,7 @@ import { publishYouTube } from "./publishers/youtube";
 import { publishTikTok } from "./publishers/tiktok";
 import { getInstagramToken, getYouTubeToken, getTikTokToken } from "./connections";
 import { youtubeSearchMeta } from "./yt-seo";
+import { freshCaption } from "./caption-gen";
 import { cred } from "./env";
 
 // The one publish engine — used by the Publish button (/api/post) and by the
@@ -30,6 +31,15 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
         ? await getYouTubeToken(userId)
         : await getTikTokToken(userId);
 
+  // Fetched up front so reposts (times_posted > 0) can get a fresh caption
+  // variant; the same row feeds the rotation bookkeeping after publishing.
+  const { data: cp } = await db
+    .from("clip_platforms")
+    .select("times_posted")
+    .eq("clip_id", clipId)
+    .eq("platform", platform)
+    .maybeSingle();
+
   const song: any = (clip as any).songs;
   const listenLink =
     song && (song.spotify_url || song.apple_url || song.youtube_url)
@@ -37,7 +47,20 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
           cred("APP_BASE_URL") || "https://recirculate-globallearningstrategies-projects.vercel.app"
         }/listen/${song.slug}?src=${platform}`
       : "";
-  const caption = [clip.caption, clip.hashtags].filter(Boolean).join("\n\n") + listenLink;
+  // First post keeps the authored caption; reposts get a fresh variant so
+  // recirculated content never reads copy-pasted. Falls back on any failure.
+  let captionBody = clip.caption ?? "";
+  if ((cp?.times_posted || 0) > 0) {
+    const variant = await freshCaption({
+      userId,
+      clipId,
+      platform,
+      title: clip.title ?? "Untitled",
+      caption: captionBody,
+    });
+    if (variant) captionBody = variant;
+  }
+  const caption = [captionBody, clip.hashtags].filter(Boolean).join("\n\n") + listenLink;
 
   let externalId: string;
   try {
@@ -64,12 +87,6 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
     throw e;
   }
 
-  const { data: cp } = await db
-    .from("clip_platforms")
-    .select("times_posted")
-    .eq("clip_id", clipId)
-    .eq("platform", platform)
-    .maybeSingle();
   await db.from("clip_platforms").upsert(
     {
       clip_id: clipId,
@@ -82,7 +99,7 @@ export async function publishClipTo(userId: string, platform: string, clipId: st
   );
   await db
     .from("post_log")
-    .insert({ user_id: userId, clip_id: clipId, platform, status: "success", external_post_id: externalId });
+    .insert({ user_id: userId, clip_id: clipId, platform, status: "success", external_post_id: externalId, caption: captionBody });
 
   return externalId;
 }

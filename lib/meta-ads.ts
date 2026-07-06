@@ -41,10 +41,75 @@ async function mfetch(path: string, init?: RequestInit & { form?: Record<string,
   return json;
 }
 
-// Saved Audiences hold a reusable targeting spec; the ad set copies it verbatim.
-export async function listSavedAudiences(): Promise<{ id: string; name: string }[]> {
-  const res = await mfetch(`${account()}/saved_audiences?fields=id,name&limit=50`);
-  return (res.data ?? []).map((a: any) => ({ id: a.id, name: a.name }));
+// Saved Audiences hold a reusable targeting spec; custom audiences (incl.
+// lookalikes) are people-lists targeted directly. The Promote panel offers both.
+export async function listAudiences(): Promise<{ id: string; name: string; kind: "saved" | "custom" }[]> {
+  const [saved, custom] = await Promise.all([
+    mfetch(`${account()}/saved_audiences?fields=id,name&limit=50`).catch(() => ({ data: [] })),
+    mfetch(`${account()}/customaudiences?fields=id,name,subtype&limit=50`).catch(() => ({ data: [] })),
+  ]);
+  return [
+    ...(saved.data ?? []).map((a: any) => ({ id: a.id as string, name: a.name as string, kind: "saved" as const })),
+    ...(custom.data ?? []).map((a: any) => ({
+      id: a.id as string,
+      name: (a.subtype === "LOOKALIKE" ? "✨ " : "") + a.name,
+      kind: "custom" as const,
+    })),
+  ];
+}
+
+const FANS_CA_NAME = "Recirculate · IG fans (engaged 365d)";
+
+// One tap: a custom audience of everyone who engaged with the Instagram
+// account in the last year, then a 1% lookalike of them in the chosen
+// country — the strongest "people like my fans" targeting Meta offers.
+// Idempotent: existing audiences with the same names are reused.
+export async function createFanLookalike(country: string): Promise<{ name: string }> {
+  const act = account();
+  const cc = /^[A-Z]{2}$/.test(country) ? country : "US";
+  const existing = await mfetch(`${act}/customaudiences?fields=id,name,subtype&limit=100`);
+  const byName = (n: string) => (existing.data ?? []).find((a: any) => a.name === n);
+
+  let fans = byName(FANS_CA_NAME);
+  if (!fans) {
+    const ig = await (async () => {
+      const res = await mfetch(`${cred("META_PAGE_ID")}?fields=instagram_business_account`);
+      return res?.instagram_business_account?.id ?? null;
+    })();
+    if (!ig) throw new Error("Couldn't find the Instagram account behind the Page.");
+    fans = await mfetch(`${act}/customaudiences`, {
+      form: {
+        name: FANS_CA_NAME,
+        subtype: "ENGAGEMENT",
+        description: "Everyone who engaged with the Instagram account, rolling 365 days",
+        rule: JSON.stringify({
+          inclusions: {
+            operator: "or",
+            rules: [
+              {
+                event_sources: [{ type: "ig_business", id: ig }],
+                retention_seconds: 365 * 86400,
+                filter: { operator: "and", filters: [{ field: "event", operator: "eq", value: "ig_business_profile_all" }] },
+              },
+            ],
+          },
+        }),
+      },
+    });
+  }
+
+  const lalName = `Recirculate · Fan lookalike 1% ${cc}`;
+  if (!byName(lalName)) {
+    await mfetch(`${act}/customaudiences`, {
+      form: {
+        name: lalName,
+        subtype: "LOOKALIKE",
+        origin_audience_id: fans.id,
+        lookalike_spec: JSON.stringify({ ratio: 0.01, country: cc }),
+      },
+    });
+  }
+  return { name: lalName };
 }
 
 async function igActorId(): Promise<string | null> {
@@ -69,7 +134,7 @@ export async function createDraftCampaign(opts: {
   listenUrl: string;
   dailyBudgetCents: number;
   days: number;
-  savedAudienceId?: string | null;
+  audience?: { kind: "saved" | "custom"; id: string } | null;
 }): Promise<{ campaignId: string; manageUrl: string }> {
   const act = account();
   const title = opts.clip.title || "Recirculate clip";
@@ -97,9 +162,20 @@ export async function createDraftCampaign(opts: {
 
   // 3. Ad set: budget, schedule, audience (paused).
   let targeting: any = DEFAULT_TARGETING;
-  if (opts.savedAudienceId) {
-    const saved = await mfetch(`${opts.savedAudienceId}?fields=targeting`);
+  if (opts.audience?.kind === "saved") {
+    const saved = await mfetch(`${opts.audience.id}?fields=targeting`);
     if (saved?.targeting) targeting = saved.targeting;
+  } else if (opts.audience?.kind === "custom") {
+    // Lookalikes carry their country in the spec; plain custom audiences get US.
+    const ca = await mfetch(`${opts.audience.id}?fields=subtype,lookalike_spec`).catch(() => null);
+    const country = ca?.lookalike_spec?.country ?? "US";
+    targeting = {
+      custom_audiences: [{ id: opts.audience.id }],
+      age_min: 18,
+      geo_locations: { countries: [country] },
+      publisher_platforms: ["instagram"],
+      instagram_positions: ["stream", "profile_feed", "explore", "reels"],
+    };
   }
   const end = new Date(Date.now() + opts.days * 86400000).toISOString();
   const adset = await mfetch(`${act}/adsets`, {
