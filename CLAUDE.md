@@ -25,8 +25,10 @@ content from scratch. Each platform rotates on its own cadence.
   7 days. Move the app to production for durable tokens. Quota ~6 uploads/day by default.
 - Instagram: needs a Business/Creator account linked to a Facebook Page, plus App Review for
   content publishing. Video must sit at a public URL. 25 posts/day.
-- TikTok: posts are forced to private (SELF_ONLY) until the app passes TikTok's audit. PULL_FROM_URL
-  needs the storage domain verified in the dev portal. One constant flips to public after the audit.
+- TikTok: production audit was REJECTED on policy grounds (July 2026 — "personal or internal company
+  use" is not supported by TikTok for Developers), so public API posting is off the table. TikTok is
+  assisted-manual: the app copies the caption, hands the video to the share sheet, and records the
+  post to advance the rotation. Sandbox API posting (private-only) still exists but is unused.
 
 ## Reuse, do not reinvent
 The repo already contains a working backend scaffold (app/api, lib, supabase/schema.sql) and a
@@ -37,7 +39,7 @@ already correct — extend them, do not rewrite from zero.
 - Never commit secrets. All keys come from env (see .env.example).
 - Keep the rotation rule identical wherever it appears.
 - Auth-gate the whole app. It is single-user but must not be world-readable.
-- Default TikTok to private until told the audit cleared.
+- TikTok publishes are assisted-manual (share sheet + mark posted) — never auto-post there via API.
 
 ## Phase 1
 Start from PHASE1_CHECKLIST.md. Build that phase only, then stop for review.

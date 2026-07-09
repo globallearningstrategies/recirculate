@@ -444,6 +444,8 @@ export default function RecirculateApp({
     return { plat: k, next, due: !!next && (!last || daysBetween(last, todayISO()) >= cadence[k]) };
   });
   const duePlats = dueInfo.filter((d) => d.due);
+  // Platforms the app can post to by API (TikTok is assisted-manual).
+  const apiDuePlats = duePlats.filter((d) => d.plat !== "tiktok");
 
   // ---- mutations ----
   const changeCadence = async (delta: number) => {
@@ -497,14 +499,15 @@ export default function RecirculateApp({
     await supabase.from("clips").update({ archived: value }).eq("id", reel.id);
   };
 
-  // Post the suggested next clip on every platform that's due, in one go.
+  // Post the suggested next clip on every API platform that's due, in one go.
+  // TikTok is excluded — its posts are assisted-manual from the TikTok tab.
   const postAllDue = async () => {
     if (posting) return;
-    const targets = duePlats;
+    const targets = duePlats.filter((d) => d.plat !== "tiktok");
     if (targets.length < 2) return;
     const lines = targets.map((d) => `• ${PLATFORMS[d.plat].name}: "${d.next!.title}"`).join("\n");
-    const tiktokNote = targets.some((d) => d.plat === "tiktok")
-      ? "\n\nNote: TikTok posts land PRIVATE until their audit clears."
+    const tiktokNote = duePlats.some((d) => d.plat === "tiktok")
+      ? "\n\n(TikTok is also due — share it manually from its tab.)"
       : "";
     if (!window.confirm(`Post everything that's due?\n\n${lines}${tiktokNote}\n\nEach posts to your real account.`)) return;
     setPosting("__all");
@@ -760,20 +763,39 @@ export default function RecirculateApp({
     }
   };
 
+  // TikTok's developer program doesn't approve personal apps for public
+  // posting (audit rejected on policy grounds), so TikTok publishes are
+  // ASSISTED-MANUAL: copy the full caption, hand the video to the share
+  // sheet, then record the post so the rotation advances.
+  const shareToTikTok = async (r: Reel) => {
+    const song = songs.find((s) => s.id === r.song_id);
+    const listen =
+      song && (song.spotify_url || song.apple_url || song.youtube_url)
+        ? `\n\n🎧 Full song: ${window.location.origin}/listen/${song.slug}?src=tiktok`
+        : "";
+    const text = [r.caption, r.hashtags].filter(Boolean).join("\n\n") + listen;
+    try {
+      if (text && navigator.clipboard) await navigator.clipboard.writeText(text);
+    } catch {}
+    setToast({ ok: true, text: "Caption copied 📋 — paste it in TikTok. Opening share…" });
+    await shareClip(r);
+    if (window.confirm(`Posted "${r.title}" on TikTok?\n\nOK records it and advances the rotation; Cancel leaves it queued.`)) {
+      await markPosted(r);
+      setToast({ ok: true, text: `Recorded — "${r.title}" moves to the back of the TikTok rotation.` });
+    }
+  };
+
   // Real publish: posts the clip to the selected platform, then advances the
   // rotation server-side. This posts to the live account, so we confirm first.
   const publishClip = async (clip: Reel) => {
     if (posting) return;
+    if (plat === "tiktok") return shareToTikTok(clip);
     const name = PLATFORMS[plat].name;
-    const tiktokNote =
-      plat === "tiktok"
-        ? "\n\nNote: until the TikTok app passes their audit, posts land as PRIVATE (only you can see them)."
-        : "";
     const audioNote =
       clip.licensed_audio && plat !== "instagram"
         ? `\n\n⚠️ This clip uses Instagram licensed music — ${name} may mute it or flag it with Content ID.`
         : "";
-    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${audioNote}${tiktokNote}`)) return;
+    if (!window.confirm(`Publish "${clip.title}" to ${name} now?\n\nThis posts to your real ${name} account.${audioNote}`)) return;
     setPosting(clip.id);
     setToast(null);
     try {
@@ -1121,7 +1143,7 @@ export default function RecirculateApp({
           </button>
         )}
 
-        {duePlats.length >= 2 && (
+        {apiDuePlats.length >= 2 && (
           <button
             className="rc-btn primary"
             style={{ width: "100%", justifyContent: "center", marginBottom: 12 }}
@@ -1129,7 +1151,7 @@ export default function RecirculateApp({
             disabled={posting !== null}
           >
             <Send size={15} />
-            {posting === "__all" ? "Posting everywhere…" : `Post all due (${duePlats.length})`}
+            {posting === "__all" ? "Posting everywhere…" : `Post all due (${apiDuePlats.length})`}
           </button>
         )}
 
@@ -1299,19 +1321,22 @@ export default function RecirculateApp({
             {upNext.hashtags && <div className="rc-tags">{upNext.hashtags}</div>}
             <div className="rc-actions">
               <button className="rc-btn primary" onClick={() => publishClip(upNext)} disabled={posting === upNext.id}>
-                <Send size={15} /> {posting === upNext.id ? "Publishing…" : `Publish to ${acc.name}`}
+                {plat === "tiktok" ? <Share2 size={15} /> : <Send size={15} />}
+                {posting === upNext.id ? "Publishing…" : plat === "tiktok" ? "Share to TikTok" : `Publish to ${acc.name}`}
               </button>
               <button className="rc-btn ghost" onClick={() => copyCaption(upNext)}>
                 {copied ? <Check size={15} /> : <Copy size={15} />}
                 {copied ? "Copied" : "Copy caption"}
               </button>
-              <button
-                className="rc-btn ghost"
-                onClick={() => setSchedClip(upNext)}
-                title="Pick a day — it posts on that morning's automatic run"
-              >
-                <CalendarClock size={15} /> Schedule
-              </button>
+              {plat !== "tiktok" && (
+                <button
+                  className="rc-btn ghost"
+                  onClick={() => setSchedClip(upNext)}
+                  title="Pick a day — it posts on that morning's automatic run"
+                >
+                  <CalendarClock size={15} /> Schedule
+                </button>
+              )}
               <button className="rc-btn ghost" onClick={() => markPosted(upNext)} title="Just record it as posted without publishing">
                 <Check size={15} /> Mark posted
               </button>
@@ -1494,7 +1519,7 @@ export default function RecirculateApp({
                 )}
                 {moreId === r.id && (
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                    {r.platforms[plat] && (
+                    {r.platforms[plat] && plat !== "tiktok" && (
                       <button className="rc-add" onClick={() => { setSchedClip(r); setMoreId(null); }}>
                         <CalendarClock size={13} /> Schedule
                       </button>

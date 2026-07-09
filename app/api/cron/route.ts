@@ -45,6 +45,13 @@ export async function GET(req: Request) {
     .eq("status", "pending")
     .lte("run_at", new Date().toISOString());
   for (const sp of dueSched ?? []) {
+    // TikTok's API only posts private for personal apps (audit rejected on
+    // policy) — never auto-post there; the owner shares manually instead.
+    if (sp.platform === "tiktok") {
+      await db.from("scheduled_posts").update({ status: "error", error: "TikTok posts are manual — share from the TikTok tab." }).eq("id", sp.id);
+      alerts.push("A scheduled TikTok post was skipped — TikTok is manual-share only now.");
+      continue;
+    }
     try {
       const externalId = await publishClipTo(sp.user_id, sp.platform, sp.clip_id);
       await db.from("scheduled_posts").update({ status: "done" }).eq("id", sp.id);
