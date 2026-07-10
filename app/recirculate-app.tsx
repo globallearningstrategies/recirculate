@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal, MessageCircle, Bell } from "lucide-react";
+import { Plus, Copy, Check, Trash2, Pencil, Clock, RotateCw, X, LogOut, Download, Music, Send, Archive, ArchiveRestore, Sparkles, Search, History, CalendarClock, Megaphone, Clapperboard, Share2, LayoutGrid, MoreHorizontal, MessageCircle, Bell, Facebook } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase-browser";
 import { PLATFORMS, PK, Icon, type Platform } from "@/lib/platforms";
 
@@ -785,6 +785,28 @@ export default function RecirculateApp({
     }
   };
 
+  // Facebook (professional-mode profile) can't be posted to by API — Meta
+  // only allows that for classic Pages. Assisted-manual like TikTok: copy
+  // caption, share sheet, record to the activity log (no rotation impact).
+  const shareToFacebook = async (r: Reel) => {
+    const song = songs.find((s) => s.id === r.song_id);
+    const listen =
+      song && (song.spotify_url || song.apple_url || song.youtube_url)
+        ? `\n\n🎧 Full song: ${window.location.origin}/listen/${song.slug}?src=facebook`
+        : "";
+    const text = [r.caption, r.hashtags].filter(Boolean).join("\n\n") + listen;
+    try {
+      if (text && navigator.clipboard) await navigator.clipboard.writeText(text);
+    } catch {}
+    setToast({ ok: true, text: "Caption copied 📋 — paste it in Facebook. Opening share…" });
+    await shareClip(r);
+    if (window.confirm(`Posted "${r.title}" on Facebook? OK records it in your activity.`)) {
+      await supabase.from("post_log").insert({ clip_id: r.id, platform: "facebook", status: "success" });
+      setLogRows(null);
+      setToast({ ok: true, text: `Recorded the Facebook post. 📘` });
+    }
+  };
+
   // Real publish: posts the clip to the selected platform, then advances the
   // rotation server-side. This posts to the live account, so we confirm first.
   const publishClip = async (clip: Reel) => {
@@ -1130,6 +1152,9 @@ export default function RecirculateApp({
               </a>
             )
           )}
+          <div className="rc-chip" title="Facebook is manual — use the 📘 button on any clip to share + record it">
+            <Facebook size={12} color="#1877F2" /> Facebook · manual
+          </div>
         </div>
 
         {view === "queue" && (
@@ -1349,6 +1374,13 @@ export default function RecirculateApp({
                   <CalendarClock size={15} /> Schedule
                 </button>
               )}
+              <button
+                className="rc-btn ghost"
+                onClick={() => shareToFacebook(upNext)}
+                title="Copy the caption and hand the video to Facebook — recorded in Activity"
+              >
+                <Facebook size={15} /> Facebook
+              </button>
               <button className="rc-btn ghost" onClick={() => markPosted(upNext)} title="Just record it as posted without publishing">
                 <Check size={15} /> Mark posted
               </button>
@@ -1544,6 +1576,11 @@ export default function RecirculateApp({
                     {r.video_path && (
                       <button className="rc-add" onClick={() => shareClip(r)}>
                         <Share2 size={13} /> Share
+                      </button>
+                    )}
+                    {r.video_path && (
+                      <button className="rc-add" onClick={() => { shareToFacebook(r); setMoreId(null); }}>
+                        <Facebook size={13} /> Facebook
                       </button>
                     )}
                     <button className="rc-add" onClick={() => { setEditing(r.id); setMoreId(null); }}>
