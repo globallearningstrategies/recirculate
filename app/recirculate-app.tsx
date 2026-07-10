@@ -891,6 +891,18 @@ export default function RecirculateApp({
 
     setEditing(null);
     await load();
+
+    // A saved clip with video but no thumbnail (new upload or a replaced
+    // video) gets one extracted server-side; refresh when it lands.
+    if (clipId && data.video_path && !data.thumb_path) {
+      fetch("/api/thumb", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clipId }),
+      })
+        .then((r) => (r.ok ? load() : null))
+        .catch(() => {});
+    }
   };
 
   // Songs (smart links): create/update with a slug derived once from the

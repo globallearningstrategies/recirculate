@@ -201,3 +201,18 @@ export async function renderLyricVideo(opts: {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+// One representative frame from a video — used to (re)build a clip's card
+// thumbnail after an upload or replacement.
+export async function extractThumb(video: Buffer, ext: string): Promise<Buffer> {
+  const dir = await mkdtemp(path.join(tmpdir(), "thumb-"));
+  try {
+    const inFile = path.join(dir, `in.${ext.replace(/[^a-z0-9]/gi, "") || "mp4"}`);
+    await writeFile(inFile, video);
+    const out = path.join(dir, "thumb.jpg");
+    await run(["-y", "-ss", "0.5", "-i", inFile, "-frames:v", "1", "-vf", "scale=540:-2", "-q:v", "4", out]);
+    return await readFile(out);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}

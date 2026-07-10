@@ -9,6 +9,8 @@ const nextConfig = {
       "/api/lyric-video/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
       "/api/transcribe": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
       "/api/transcribe/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
+      "/api/thumb": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
+      "/api/thumb/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],
     },
   },
 };
