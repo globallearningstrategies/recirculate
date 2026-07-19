@@ -233,6 +233,25 @@ export default function RecirculateApp({
     load();
   }, [load]);
 
+  // Clips from before auto-thumbnailing have a video but no thumb, so their
+  // cards show a blank box instead of a recognizable frame. Backfill them
+  // server-side once per page load, refreshing the library as thumbs land.
+  const thumbBackfillRan = useRef(false);
+  useEffect(() => {
+    if (!loaded || thumbBackfillRan.current) return;
+    if (!reels.some((r) => r.video_path && !r.thumb_path)) return;
+    thumbBackfillRan.current = true;
+    (async () => {
+      for (let i = 0; i < 20; i++) {
+        const res = await fetch("/api/thumb/backfill", { method: "POST" });
+        if (!res.ok) break;
+        const body = await res.json();
+        if (body.done) await load();
+        if (!body.done || !body.remaining) break;
+      }
+    })().catch(() => {});
+  }, [loaded, reels, load]);
+
   // A "Published to Instagram 🎉" banner has no business on the TikTok tab.
   useEffect(() => {
     setToast(null);
