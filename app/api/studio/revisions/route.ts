@@ -3,6 +3,18 @@ import { db } from "@/lib/supabase";
 import { studioOwner, ownedAsset } from "@/lib/studio-auth";
 import { validateExcerpts } from "@/lib/studio";
 
+export async function GET(req: Request) {
+  try {
+    const { user } = await studioOwner();
+    const id = new URL(req.url).searchParams.get("jobId");
+    const { data } = await db.from("studio_jobs").select("audio_path,start_seconds").eq("id", id).eq("user_id", user.id).single();
+    if (!data || !ownedAsset(data.audio_path, user.id)) return NextResponse.json({ error: "Draft not found." }, { status: 404 });
+    const { data: signed, error } = await db.storage.from("song-assets").createSignedUrl(data.audio_path, 3600);
+    if (error || !signed) throw new Error("Could not load audio for editing.");
+    return NextResponse.json({ src: signed.signedUrl, offset: data.start_seconds }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (e: any) { return NextResponse.json({ error: e.message }, { status: e.message === "Not authorized." ? 401 : 400 }); }
+}
+
 // A correction makes a new draft; existing downloads and scheduled clips stay intact.
 export async function POST(req: Request) {
   try {

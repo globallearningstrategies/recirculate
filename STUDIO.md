@@ -53,3 +53,8 @@ The additional spiritual test renders a 20-second sample with English, Hebrew an
 Cosmic Dreamcore now draws every frame from animated geometry: perspective gates, a shaded orbiting planet, flowing nebula ribbons, stars moving in depth, and rolling reflective water. It uses no still image in the video background. This is abstract animation, not generated photorealistic footage. Existing completed videos remain unchanged; create a new version to use the current renderer.
 
 Transcription defaults to mixed Hebrew/English auto-detection. Users can type Hebrew script directly into excerpt lyrics. Review cards expose Edit lyrics / make new version, with an RTL-aware editable transcript. Saving creates a new queued job in the same batch; the source video, downloads, and schedules remain intact. The revisions endpoint authenticates the owner and only copies that owner's job and source paths. Captions remain line-timed; preserve or add timestamps to position corrected Hebrew lines.
+
+## Phrase editor
+
+The studio now uses short phrase cards with explicit start and end times, audition playback, playhead timing buttons, splitting, Hebrew/English text and a live caption preview. Existing timestamped verses are split with estimated timing for owner review. New studio transcriptions request word and segment timestamps and group words into short phrases, retaining silence between sung phrases. End times survive saving and rendering through the serialized [m:ss.sss --> m:ss.sss] format; no schema migration is needed. Server validation rejects overlaps and out-of-range times. The title fades after the opening 2.5 seconds. Previous completed videos remain unchanged until a corrected draft is rendered.
+

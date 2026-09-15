@@ -1,4 +1,5 @@
 // Shared, browser-safe studio types and validation. No server credentials here.
+import { parseCues, serializeCues, validateCues } from "./lyric-cues";
 export const TREATMENTS = {
   cosmic: { label: "Cosmic Dreamcore", description: "Continuous animated gates, rolling water, orbiting planets and flowing stars · no extra subscription" },
   spiritual: { label: "Spiritual journey", description: "Stars, golden light, Jerusalem silhouettes and flowing water · no AI subscription" },
@@ -23,7 +24,8 @@ export function validateExcerpts(value: unknown, audioDuration: number): Excerpt
     const lyrics = typeof item?.lyrics === "string" ? item.lyrics.trim() : "";
     if (!Number.isFinite(start) || start < 0 || !Number.isFinite(duration) || duration < 10 || duration > 45 || start + duration > audioDuration + 0.1) throw new Error("Each excerpt must be 10–45 seconds and fit inside the audio.");
     if (!lyrics || lyrics.length > 8000) throw new Error("Add lyrics for every excerpt (up to 8,000 characters).");
-    return { start, duration, lyrics };
+    const cues = parseCues(lyrics, duration); validateCues(cues, duration);
+    return { start, duration, lyrics: serializeCues(cues) };
   });
 }
 

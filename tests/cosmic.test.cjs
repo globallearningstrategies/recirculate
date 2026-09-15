@@ -6,6 +6,24 @@ const ts = require('typescript');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
 const { validateTreatments } = require('../lib/studio.ts');
 const { studioSubtitles } = require('../lib/studio-subtitles.ts');
+const { parseCues, serializeCues, validateCues, wordCues } = require('../lib/lyric-cues.ts');
+test('explicit phrase endings preserve silence, Hebrew and editable timing', () => {
+  const cues = [{ text: 'Come to me', start: .125, end: 2.4 }, { text: 'אני לדודי', start: 4.5, end: 6.1 }];
+  assert.deepEqual(parseCues(serializeCues(cues), 10), cues);
+  validateCues(cues, 10);
+  assert.throws(() => validateCues([{ ...cues[0], end: 5 }, cues[1]], 10), /overlap/);
+  assert.throws(() => validateCues([{ ...cues[0], end: 11 }], 10));
+  const ass = studioSubtitles('Song', cues, 10, true, true);
+  assert.match(ass, /0:00:00\.13,0:00:02\.40,Lyrics/);
+  assert.match(ass, /0:00:04\.50,0:00:06\.10,Lyrics/);
+  assert.match(ass, /0:00:02\.50,Title/);
+});
+test('word timings stop phrases at singing boundaries and old verses become short phrases', () => {
+  const cues = wordCues([{word:'Come',start:0,end:.5},{word:'home.',start:.5,end:1.1},{word:'שלום',start:3,end:3.6}], 10);
+  assert.equal(cues.length, 2); assert.equal(cues[0].end, 1.1); assert.equal(cues[1].start, 3);
+  const old = parseCues('[0:00] This is a long verse with many words that should never stay on screen together for the entire song', 20);
+  assert.ok(old.length > 2); assert.ok(old.every(c => c.text.length <= 42)); validateCues(old,20);
+});
 test('subtitle timings, bilingual text and literal override characters', () => {
   const ass = studioSubtitles('Title', [{ start: 1.125, end: 5, text: 'Hello שלום\n{\\pos(0,0)} 100%' }], 20, true, true);
   assert.match(ass, /0:00:01\.13,0:00:05\.00/);

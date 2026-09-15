@@ -1,7 +1,8 @@
 import { copyFile, writeFile, readFile, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseLyrics, run } from "./lyric-video";
+import { run } from "./lyric-video";
+import { parseCues, validateCues } from "./lyric-cues";
 import type { Treatment } from "./studio";
 import { renderSpiritualMotion } from "./spiritual-motion";
 import { cosmicFrame } from "./cosmic-motion";
@@ -13,6 +14,14 @@ const wrap = (value: string, width = 22) => value.split(/\s+/).reduce<string[]>(
   else rows.push(word);
   return rows;
 }, []).join("\n");
+function wrapCaption(text: string) {
+  const value = text.replace(/\s+/g, " ").trim();
+  if (value.length <= 30) return value;
+  const spaces = [...value.matchAll(/ /g)].map(m => m.index!);
+  if (!spaces.length) return value;
+  const split = spaces.reduce((a, b) => Math.abs(a - value.length / 2) < Math.abs(b - value.length / 2) ? a : b);
+  return value.slice(0, split) + "\n" + value.slice(split + 1);
+}
 
 export async function renderStudioVideo(input: Input) {
   const dir = await mkdtemp(path.join(tmpdir(), "studio-"));
@@ -23,7 +32,8 @@ export async function renderStudioVideo(input: Input) {
     await writeFile(path.join(dir, "audio"), input.audio);
     await writeFile(path.join(dir, "title.txt"), wrap(input.title, 36));
     if (input.background) await writeFile(path.join(dir, "background"), input.background);
-    const lines = parseLyrics(input.lyrics, input.duration);
+    const lines = parseCues(input.lyrics, input.duration);
+    validateCues(lines, input.duration);
     if (!lines.length) throw new Error("No lyrics fall inside this excerpt.");
     const args = ["-y", "-threads", "2", "-filter_complex_threads", "1", "-ss", String(input.start), "-t", String(input.duration), "-i", "audio"];
     let backdrop: string;
@@ -45,7 +55,7 @@ export async function renderStudioVideo(input: Input) {
       args.push("-f", "lavfi", "-i", "gradients=size=1080x1920:c0=0x100B29:c1=0x513B81:speed=0.015:rate=30");
       backdrop = "[1:v]null[bg]";
     }
-    await writeFile(path.join(dir, "lyrics.ass"), studioSubtitles(wrap(input.title, 36), lines.map(line => ({ ...line, text: wrap(line.text) })), input.duration, ["spiritual", "cosmic"].includes(input.treatment), ["kinetic", "spiritual", "cosmic"].includes(input.treatment)));
+    await writeFile(path.join(dir, "lyrics.ass"), studioSubtitles(wrap(input.title, 36), lines.map(line => ({ ...line, text: wrapCaption(line.text) })), input.duration, ["spiritual", "cosmic"].includes(input.treatment), ["kinetic", "spiritual", "cosmic"].includes(input.treatment)));
     const filters = ["drawbox=x=480:y=330:w=120:h=4:color=0xBDA6FF:t=fill", "ass=filename=lyrics.ass:fontsdir=fonts"];
     const audio = `[0:a]afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, input.duration - 0.15)}:d=0.15[a]`;
     let graph = `${backdrop};${audio};[bg]${filters.join(",")}[text]`;

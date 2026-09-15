@@ -3,6 +3,7 @@ import { db, BUCKET } from "@/lib/supabase";
 import { studioOwner, ownedAsset } from "@/lib/studio-auth";
 import { renderStudioVideo } from "@/lib/studio-render";
 import { ASSET_BUCKET, MAX_ASSET_BYTES } from "@/lib/studio";
+import { parseCues } from "@/lib/lyric-cues";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
     if (videoUpload.error) throw videoUpload.error;
     const thumbnail = await db.storage.from(BUCKET).upload(thumbPath, thumb, { contentType: "image/jpeg", upsert: true });
     // Deterministic ID prevents duplicate clips when a render response is lost.
-    const { error: clipError } = await db.from("clips").upsert({ id: job.id, user_id: user.id, song_id: job.song_id, title: job.title, caption: job.lyrics.replace(/\[\d+:\d+(?:\.\d+)?\]\s*/g, "").split("\n")[0], source: "studio", video_path: videoPath, thumb_path: thumbnail.error ? null : thumbPath }, { onConflict: "id" });
+    const { error: clipError } = await db.from("clips").upsert({ id: job.id, user_id: user.id, song_id: job.song_id, title: job.title, caption: parseCues(job.lyrics, job.duration_seconds)[0]?.text || "", source: "studio", video_path: videoPath, thumb_path: thumbnail.error ? null : thumbPath }, { onConflict: "id" });
     if (clipError) throw clipError;
     const { error: doneError } = await db.from("studio_jobs").update({ status: "ready", clip_id: job.id, error: null, updated_at: new Date().toISOString() }).eq("id", job.id).eq("user_id", user.id);
     if (doneError) throw doneError;

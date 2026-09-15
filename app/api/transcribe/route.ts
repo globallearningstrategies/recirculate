@@ -3,6 +3,7 @@ import { db, BUCKET } from "@/lib/supabase";
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { extractAudioSegment } from "@/lib/lyric-video";
 import { cred } from "@/lib/env";
+import { parseCues, serializeCues, wordCues } from "@/lib/lyric-cues";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -63,6 +64,7 @@ export async function POST(req: Request) {
   fd.append("model", "whisper-1");
   fd.append("response_format", "verbose_json");
   fd.append("temperature", "0");
+  if (body.studio === true) { fd.append("timestamp_granularities[]", "word"); fd.append("timestamp_granularities[]", "segment"); }
   if (language) fd.append("language", language);
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -90,5 +92,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Whisper couldn't make out any lyrics in that segment — try a section with clearer vocals." }, { status: 422 });
   }
 
-  return NextResponse.json({ ok: true, lyrics: lines.join("\n"), detected: json.language ?? null });
+  const words = body.studio === true && Array.isArray(json.words) ? wordCues(json.words, duration) : [];
+  return NextResponse.json({ ok: true, lyrics: body.studio === true ? serializeCues(words.length ? words : parseCues(lines.join("\n"), duration)) : lines.join("\n"), detected: json.language ?? null, timing: words.length ? "words" : "estimated" });
 }
