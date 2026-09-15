@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/verify-renderer.cjs && next build",
     "start": "next start",
     "lint": "next lint",
     "test": "node --test tests/studio.test.cjs tests/spiritual.test.cjs tests/cosmic.test.cjs"

@@ -41,7 +41,10 @@ export async function POST(req: Request) {
     if (doneError) throw doneError;
     return NextResponse.json({ ok: true, clipId: job.id });
   } catch (e: any) {
-    if (claimedId) await db.from("studio_jobs").update({ status: "error", error: String(e.message).slice(0, 600), updated_at: new Date().toISOString() }).eq("id", claimedId);
-    return NextResponse.json({ error: e.message || "Rendering failed." }, { status: e.message === "Not authorized." ? 401 : 500 });
+    const detail = String(e.message || "Rendering failed.");
+    const message = detail.startsWith("ffmpeg") ? "The video renderer failed. Your song and draft are saved; tap Render / resume batch to retry." : detail;
+    console.error("Studio render failed", { jobId: claimedId, error: detail });
+    if (claimedId) await db.from("studio_jobs").update({ status: "error", error: message.slice(0, 600), updated_at: new Date().toISOString() }).eq("id", claimedId);
+    return NextResponse.json({ error: message }, { status: e.message === "Not authorized." ? 401 : 500 });
   }
 }

@@ -107,12 +107,13 @@ let browser;
     assert.equal(await stalled.getByRole('link', { name: 'reload the studio', exact: true }).isVisible(), true);
     await noJs.close();
     // A failing optional endpoint must not leave loading forever or block typing a title.
-    await page.route('**/api/studio/preferences', route => route.fulfill({ status: 503, json: { error: 'Settings temporarily unavailable' } }));
+    await page.route('**/api/studio/preferences', route => route.fulfill({ status: 503, json: { error: 'Settings temporarily unavailable ' + 'long-render-error:'.repeat(100) } }));
     await page.reload();
     await page.getByRole('alert').filter({ hasText: 'Settings temporarily unavailable' }).waitFor();
     await page.getByLabel('New song title').fill('Still works');
     assert.equal(await page.getByRole('button', { name: 'Add song', exact: true }).isEnabled(), true);
     assert.equal(await page.getByLabel('Daily posting reminders').isEnabled(), false);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Long errors must not widen the mobile page');
     console.log('PASS: create batch, render/resume, select, destination approval, schedule, quiet preferences, desktop and mobile layout; all backend requests mocked.');
   } finally {
     if (browser) await browser.close();

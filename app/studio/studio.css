@@ -4,3 +4,5 @@
 .studio-inline > label{min-width:130px}
 .cosmic .studio-treatment-art{background:linear-gradient(0deg,#040c1fcc,#040c1f22),url('/dreamcore/gateway.jpg') center 40%/cover;color:#ffe5b5;text-shadow:0 2px 8px #000}.cosmic .studio-treatment-art>span{font-size:42px}.cosmic .studio-treatment-art i{font-size:18px;letter-spacing:0;color:#fff2d3}
 .studio-treatments{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.spiritual .studio-treatment-art{background:radial-gradient(ellipse at center,#755631 0%,#172b42 45%,#080f20 85%);color:#ffe0a3;font-size:64px}.spiritual .studio-treatment-art i{font-size:18px;letter-spacing:0;color:#ffe8bb;margin-top:8px}@media(max-width:550px){.studio-treatments{grid-template-columns:1fr 1fr}.spiritual .studio-treatment-art{font-size:48px}.spiritual .studio-treatment-art i{font-size:14px}}
+
+.studio-create,.studio-panel,.studio-message,.studio-review-grid,.studio-video-card{min-width:0}.studio-message,.studio-card-error{overflow-wrap:anywhere;word-break:break-word}.studio-message{max-width:100%}

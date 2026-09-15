@@ -5,6 +5,14 @@ const path = require('node:path');
 const ts = require('typescript');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
 const { validateTreatments } = require('../lib/studio.ts');
+const { studioSubtitles } = require('../lib/studio-subtitles.ts');
+test('subtitle timings, bilingual text and literal override characters', () => {
+  const ass = studioSubtitles('Title', [{ start: 1.125, end: 5, text: 'Hello שלום\n{\\pos(0,0)} 100%' }], 20, true, true);
+  assert.match(ass, /0:00:01\.13,0:00:05\.00/);
+  assert.ok(ass.includes('Hello שלום\\N｛＼pos(0,0)｝ 100%'));
+  assert.ok(!ass.includes('{\\pos(0,0)}'));
+  assert.ok(ass.includes('DejaVu Sans'));
+});
 test('cosmic backgrounds are bundled and require no uploaded background', () => {
   assert.deepEqual(validateTreatments(['cosmic'], {}), ['cosmic']);
   for (const scene of ['gateway', 'ocean']) assert.ok(fs.statSync(path.join(__dirname, '..', 'public', 'dreamcore', scene + '.jpg')).size > 10000);
