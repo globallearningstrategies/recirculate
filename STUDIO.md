@@ -4,11 +4,17 @@ Open `/studio` from the Music clip studio link above the library tabs.
 
 ## Workflow
 
-1. Choose or create a song. Upload its MP3/WAV/M4A (or original video for its audio), optional artwork and optional performance footage. Save the assets once.
+1. Choose an existing song or pick an MP3/WAV/M4A (or original video for its audio). A new upload supplies the title from its filename; edit it if needed, then tap **Save song**. You can also create a song separately without losing the file you already chose. Artwork and performance footage are optional.
 2. Choose up to three excerpts, 10–45 seconds each. **Suggest energetic moments** analyzes the audio in the browser and proposes non-overlapping windows to audition. This is an energy heuristic, not a chorus detector.
 3. Paste lyrics or transcribe each excerpt. Correct sung words and timestamps. `[0:04.750]` means 4.75 seconds into the excerpt, not into the full song. Unstamped lines receive equal time slots.
 4. Choose up to four visual treatments, then create up to 12 drafts. **Cosmic Dreamcore** is selected by default and needs only the song audio and lyrics. Start rendering on the review screen. Keep it open; a completed draft is saved after each video. Interrupted batches can resume. Failed requests become retryable after their ten-minute lease expires.
 5. Preview, download, or select completed clips. Choose a connected Instagram/YouTube account and explicitly approve that destination before scheduling. The current connection system supports one account per platform. A separate clips account must be connected before scheduling to it; downloads work for any manually managed account.
+
+## Startup and upload recovery
+
+The server-rendered startup notice includes a normal reload link, so it works even when the JavaScript bundle fails to start. A studio error boundary provides recovery after client errors. Initial reads load independently with 15-second deadlines; a failed preferences or scheduling request cannot hold up the song list indefinitely. Notification controls stay disabled until their actual saved values load. Save and Create buttons explain their prerequisites beside the action.
+
+The reported iPhone freeze could not be reproduced in a signed-in production session; these recovery paths do not establish its original cause. Browser coverage checks title interactivity, local audio selection, preservation across song creation, unavailable settings, and the no-JavaScript recovery notice.
 
 ## Notification defaults
 

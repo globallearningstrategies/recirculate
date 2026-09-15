@@ -6,5 +6,5 @@ import "./studio.css";
 export const dynamic = "force-dynamic";
 export default async function StudioPage() {
   try { await studioOwner(); } catch { redirect("/login"); }
-  return <Studio />;
+  return <Studio reloadHref={`/studio?reload=${Date.now()}`} />;
 }
