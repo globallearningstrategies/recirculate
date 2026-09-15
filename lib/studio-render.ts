@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseLyrics, run } from "./lyric-video";
 import type { Treatment } from "./studio";
 import { renderSpiritualMotion } from "./spiritual-motion";
-import { cosmicBackdrop } from "./cosmic-dreamcore";
+import { cosmicFrame } from "./cosmic-motion";
 import { studioSubtitles } from "./studio-subtitles";
 
 type Input = { audio: Buffer; background?: Buffer; treatment: Treatment; title: string; lyrics: string; start: number; duration: number };
@@ -28,8 +28,9 @@ export async function renderStudioVideo(input: Input) {
     const args = ["-y", "-threads", "2", "-filter_complex_threads", "1", "-ss", String(input.start), "-t", String(input.duration), "-i", "audio"];
     let backdrop: string;
     if (input.treatment === "cosmic") {
-      const cosmic = await cosmicBackdrop(dir, input.duration, input.start);
-      args.push(...cosmic.args); backdrop = cosmic.backdrop;
+      await renderSpiritualMotion(dir, input.start, input.duration, cosmicFrame);
+      args.push("-i", "spiritual.mp4");
+      backdrop = "[1:v]scale=1080:1920:flags=lanczos,setsar=1,fps=30[bg]";
     } else if (input.treatment === "spiritual") {
       await renderSpiritualMotion(dir, input.start, input.duration);
       args.push("-i", "spiritual.mp4");

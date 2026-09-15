@@ -52,6 +52,12 @@ let browser;
       } else if (url.endsWith('/render')) {
         const job = jobs.find((j) => j.id === route.request().postDataJSON().jobId);
         job.status = 'ready'; job.clip_id = job.id; job.video_url = '/test-media/kinetic.mp4'; job.thumb_url = '/test-media/kinetic.jpg';
+      } else if (url.endsWith('/revisions')) {
+        const body = route.request().postDataJSON();
+        assert.ok(body.lyrics.includes('אני לדודי ודודי לי'));
+        const source = jobs.find(j => j.id === body.jobId);
+        jobs.push({ ...source, id: 'revised-job', status: 'queued', lyrics: body.lyrics, video_url: undefined, thumb_url: undefined, clip_id: null });
+        json = { jobId: 'revised-job' };
       } else if (url.endsWith('/schedule')) { scheduleBody = route.request().postDataJSON(); json = { count: scheduleBody.jobIds.length, destination: 'realjordancohen' }; }
       else throw new Error(`Unexpected studio request: ${url}`);
       await route.fulfill({ json });
@@ -91,6 +97,13 @@ let browser;
     await page.getByRole('button', { name: 'Schedule 1 selected clip' }).click();
     await page.getByText('1 clips scheduled for realjordancohen.').waitFor();
     assert.equal(scheduleBody.accountId, 'account-1'); assert.equal(scheduleBody.jobIds.length, 1);
+    await page.getByRole('button', { name: 'Edit lyrics / make new version' }).first().click();
+    await page.getByLabel('Corrected lyrics').fill('[0:00] English line\n[0:04.500] אני לדודי ודודי לי');
+    assert.equal(await page.getByLabel('Corrected lyrics').getAttribute('dir'), 'auto');
+    await page.getByRole('button', { name: 'Save corrected draft' }).click();
+    await page.getByText('Corrected lyrics saved as a new draft.', { exact: false }).waitFor();
+    assert.equal(jobs.filter(j => j.status === 'ready').length, 2, 'Original videos remain available');
+    assert.equal(jobs.find(j => j.id === 'revised-job').status, 'queued');
     await page.getByLabel('Daily posting reminders').click();
     await page.getByText('Notification preferences saved.').waitFor();
     assert.equal(prefs.daily_reminders, true);

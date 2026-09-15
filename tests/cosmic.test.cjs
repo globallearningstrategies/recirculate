@@ -13,9 +13,14 @@ test('subtitle timings, bilingual text and literal override characters', () => {
   assert.ok(!ass.includes('{\\pos(0,0)}'));
   assert.ok(ass.includes('DejaVu Sans'));
 });
-test('cosmic backgrounds are bundled and require no uploaded background', () => {
+test('cosmic animation changes geometry and water between frames without a background upload', () => {
   assert.deepEqual(validateTreatments(['cosmic'], {}), ['cosmic']);
-  for (const scene of ['gateway', 'ocean']) assert.ok(fs.statSync(path.join(__dirname, '..', 'public', 'dreamcore', scene + '.jpg')).size > 10000);
+  const { cosmicFrame } = require('../lib/cosmic-motion.ts');
+  const a = cosmicFrame(1, 20, .2, 3), b = cosmicFrame(2, 20, .2, 3);
+  assert.equal(a.length, 540 * 960 * 3);
+  assert.notDeepEqual(a.subarray(0, 540 * 450 * 3), b.subarray(0, 540 * 450 * 3));
+  assert.notDeepEqual(a.subarray(540 * 650 * 3), b.subarray(540 * 650 * 3));
+  assert.deepEqual(a, cosmicFrame(1, 20, .2, 3));
 });
 if (process.env.TEST_RENDER === '1') test('renders both dreamscapes with bilingual lyrics and the complete audio excerpt', { timeout: 240000 }, async () => {
   const { run } = require('../lib/lyric-video.ts');

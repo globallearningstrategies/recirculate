@@ -6,13 +6,13 @@ import { run } from "./lyric-video";
 // A small software motion-graphics engine: no browser, native canvas, or paid API.
 // Backgrounds render at 540p; captions are added at the final 1080p resolution.
 const W = 540, H = 960, FPS = 24;
-type Color = [number, number, number];
+export type Color = [number, number, number];
 const gold: Color = [255, 201, 125], ivory: Color = [255, 241, 210];
 const clamp = (n: number) => Math.max(0, Math.min(1, n));
 const smooth = (n: number) => { n = clamp(n); return n * n * (3 - 2 * n); };
 const random = (n: number) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 
-class Paint {
+export class Paint {
   constructor(public pixels: Buffer) {}
   dot(x: number, y: number, c: Color, alpha: number) {
     x = Math.round(x); y = Math.round(y);
@@ -149,7 +149,7 @@ export function spiritualFrame(t: number, duration: number, energy = 0, seed = 1
   return out;
 }
 
-export async function renderSpiritualMotion(dir: string, start: number, duration: number) {
+export async function renderSpiritualMotion(dir: string, start: number, duration: number, frameAt = spiritualFrame) {
   await run(["-y", "-ss", String(start), "-t", String(duration), "-i", "audio", "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "energy.pcm"], dir);
   const pcm = await readFile(`${dir}/energy.pcm`), levels: number[] = [];
   for (let frame = 0; frame < Math.ceil(duration * FPS); frame++) {
@@ -172,7 +172,7 @@ export async function renderSpiritualMotion(dir: string, start: number, duration
     for (let i = 0; i < levels.length; i++) {
       if (failure || child.exitCode !== null || child.killed) throw failure || new Error("Motion renderer stopped.");
       energy += (levels[i] / peak - energy) * .2;
-      const frame = spiritualFrame(i / FPS, duration, energy, seed);
+      const frame = frameAt(i / FPS, duration, energy, seed);
       // Await each write callback to cap memory and propagate broken-pipe failures.
       await new Promise<void>((resolve, reject) => child.stdin.write(frame, (error) => error ? reject(error) : resolve()));
     }
