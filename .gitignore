@@ -9,3 +9,6 @@ node_modules
 
 # Next.js
 next-env.d.ts
+.studio-test/
+*.tsbuildinfo
+pnpm-lock.yaml

@@ -54,7 +54,7 @@ export function parseLyrics(raw: string, duration: number): Line[] {
   const items: { at: number | null; text: string }[] = [];
   let carryAt: number | null = null;
   for (const r of rows) {
-    const m = r.match(/^\[(\d+):(\d{1,2})\]\s*(.*)$/);
+    const m = r.match(/^\[(\d+):(\d{1,2}(?:\.\d{1,3})?)\]\s*(.*)$/);
     const at = m ? Number(m[1]) * 60 + Number(m[2]) : null;
     const text = m ? m[3].trim() : r;
     if (!text) {
@@ -88,18 +88,19 @@ export function parseLyrics(raw: string, duration: number): Line[] {
   return lines.filter((l) => l.end > l.start);
 }
 
-function run(args: string[]): Promise<void> {
+export function run(args: string[], cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) return reject(new Error("ffmpeg binary missing on this deployment"));
-    const p = spawn(ffmpegPath as string, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const p = spawn(ffmpegPath as string, args, { cwd, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    const timeout = setTimeout(() => p.kill(), 240000);
     let err = "";
     p.stderr.on("data", (d) => {
       err += d.toString();
       if (err.length > 8000) err = err.slice(-8000);
     });
-    p.on("error", reject);
+    p.on("error", (error) => { clearTimeout(timeout); reject(error); });
     p.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-600)}`))
+      { clearTimeout(timeout); code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-600)}`)); }
     );
   });
 }
