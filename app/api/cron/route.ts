@@ -7,14 +7,13 @@ import { publishClipTo } from "@/lib/publish";
 import { adsConfigured, adInsightsLast7d } from "@/lib/meta-ads";
 import { sendPushToOwner } from "@/lib/push";
 import { cred } from "@/lib/env";
+import { QUIET_DEFAULTS } from "@/lib/studio";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-// Daily nudge, not an auto-poster: publishing always stays a human tap in the
-// app. This cron checks which platforms are due per the rotation rule, works
-// out the suggested next clip, and emails the owner a digest with a link. If
-// nothing is due, it sends nothing.
+// Execute previously approved posts and maintain connections daily. Routine
+// reminder emails/pushes and weekly summaries are separately opt-in.
 const NAMES: Record<string, string> = { youtube: "YouTube", instagram: "Instagram", tiktok: "TikTok" };
 
 export async function GET(req: Request) {
@@ -25,12 +24,18 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // ?force=1 emails the digest even when nothing is due — for testing the
-  // pipeline and for "just show me what's up next" moments.
+  // ?force=1 ignores cadence/day-of-week for testing, but never overrides
+  // the owner's notification preferences.
   const force = new URL(req.url).searchParams.get("force") === "1";
 
   const { data: settings, error } = await db.from("settings").select("user_id, platform, cadence_days, active");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const ownerId = settings?.[0]?.user_id;
+  const { data: savedPreferences } = ownerId
+    ? await db.from("notification_preferences").select("daily_reminders,weekly_summary,failure_alerts").eq("user_id", ownerId).maybeSingle()
+    : { data: null };
+  // Missing preferences fail quiet. force never overrides a user's choice.
+  const preferences = savedPreferences ?? QUIET_DEFAULTS;
 
   const results: any[] = [];
   const alerts: string[] = [];
@@ -41,10 +46,16 @@ export async function GET(req: Request) {
   // platform's cadence, so the digest below won't nag about it. ----
   const { data: dueSched } = await db
     .from("scheduled_posts")
-    .select("id, user_id, clip_id, platform")
+    .select("id, user_id, clip_id, platform, destination_account_id")
     .eq("status", "pending")
-    .lte("run_at", new Date().toISOString());
+    .lte("run_at", new Date().toISOString())
+    .order("run_at");
+  const attemptedPlatforms = new Set<string>();
   for (const sp of dueSched ?? []) {
+    if (attemptedPlatforms.has(sp.platform)) continue;
+    attemptedPlatforms.add(sp.platform);
+    const { data: claim } = await db.from("scheduled_posts").update({ status: "processing" }).eq("id", sp.id).eq("status", "pending").select("id").maybeSingle();
+    if (!claim) continue;
     // TikTok's API only posts private for personal apps (audit rejected on
     // policy) — never auto-post there; the owner shares manually instead.
     if (sp.platform === "tiktok") {
@@ -53,6 +64,10 @@ export async function GET(req: Request) {
       continue;
     }
     try {
+      if (sp.destination_account_id) {
+        const { data: account } = await db.from("social_connections").select("external_user_id").eq("user_id", sp.user_id).eq("platform", sp.platform).single();
+        if (account?.external_user_id !== sp.destination_account_id) throw new Error("Destination account changed. Review and schedule this clip again.");
+      }
       const externalId = await publishClipTo(sp.user_id, sp.platform, sp.clip_id);
       await db.from("scheduled_posts").update({ status: "done" }).eq("id", sp.id);
       results.push({ scheduled: sp.platform, posted: externalId });
@@ -73,7 +88,7 @@ export async function GET(req: Request) {
       continue;
     }
     if (!s.next) { results.push({ platform: cfg.platform, skipped: "no clips in rotation" }); continue; }
-    due.push({ platform: cfg.platform, sinceLast: s.sinceLast, title: s.next.title });
+    if (preferences.daily_reminders) due.push({ platform: cfg.platform, sinceLast: s.sinceLast, title: s.next.title });
     results.push({ platform: cfg.platform, due: true, suggested: s.next.title });
   }
 
@@ -100,6 +115,7 @@ export async function GET(req: Request) {
     }
   }
 
+  if (!preferences.failure_alerts) alerts.length = 0;
   let emailed = false;
   if (due.length > 0 || alerts.length > 0) {
     const apiKey = cred("BREVO_API_KEY");
@@ -178,7 +194,7 @@ export async function GET(req: Request) {
   try {
     const posted = results.filter((r) => r.scheduled && r.posted).length;
     const bits: string[] = [];
-    if (posted) bits.push(`Posted ${posted} scheduled clip${posted === 1 ? "" : "s"}`);
+    if (posted && preferences.daily_reminders) bits.push(`Posted ${posted} scheduled clip${posted === 1 ? "" : "s"}`);
     if (due.length) bits.push(`${due.map((d) => NAMES[d.platform]).join(" + ")} due — tap to publish`);
     if (alerts.length) bits.push(`${alerts.length} connection issue${alerts.length === 1 ? "" : "s"} need attention`);
     if (bits.length) {
@@ -199,7 +215,7 @@ export async function GET(req: Request) {
   const scoreKey = cred("BREVO_API_KEY");
   const scoreTo = cred("OWNER_EMAIL");
   const userId = (settings?.[0] as any)?.user_id as string | undefined;
-  if ((isSunday || force) && scoreKey && scoreTo && userId) {
+  if (preferences.weekly_summary && (isSunday || force) && scoreKey && scoreTo && userId) {
     try {
       // Fresh numbers for recent posts before summarizing them.
       await refreshPostMetrics(userId, 30).catch(() => null);

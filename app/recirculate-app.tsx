@@ -1103,6 +1103,10 @@ export default function RecirculateApp({
           </form>
         </div>
 
+        <a href="/studio" className="rc-btn primary" style={{ display: "flex", justifyContent: "space-between", textDecoration: "none", marginBottom: 20, padding: 18 }}>
+          <span><Sparkles size={17} style={{ verticalAlign: "middle", marginRight: 8 }} /> Music clip studio</span>
+          <span>Upload a song · Create a batch →</span>
+        </a>
         <div className="rc-tabs">
           {PK.map((k) => (
             <button
