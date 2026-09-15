@@ -11,7 +11,7 @@ export async function cosmicBackdrop(dir: string, duration: number, start: numbe
   const args = scenes.flatMap((_, i) => ["-loop", "1", "-framerate", "24", "-i", `cosmic-${i}.jpg`]);
   const filters = scenes.map((_, i) => {
     const zoom = i === 0 ? `1.02+0.12*on/${frames}` : `1.14-0.12*on/${frames}`;
-    return `[${i + 1}:v]scale=1440:2560:force_original_aspect_ratio=increase,crop=1440:2560,zoompan=z='${zoom}':x='(iw-iw/zoom)/2+sin(on/${frames}*1.5)*12':y='(ih-ih/zoom)/2':d=1:s=720x1280:fps=24,trim=duration=${length},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[scene${i}]`;
+    return `[${i + 1}:v]scale=1440:2560:force_original_aspect_ratio=increase,crop=1440:2560,zoompan=z='${zoom}':x='(iw-iw/zoom)/2+sin(on/${frames}*1.5)*12':y='(ih-ih/zoom)/2':d=1:s=720x1280:fps=24,trim=duration=${length},setpts=PTS-STARTPTS,fps=24,settb=1/24,setsar=1,format=yuv420p[scene${i}]`;
   });
   // Slowly changing light and a vignette keep the foreground lyrics readable.
   filters.push(`[scene0][scene1]xfade=transition=fade:duration=${dissolve}:offset=${cut},eq=brightness='0.008*sin(t*0.45)':eval=frame,vignette=PI/5,scale=1080:1920:flags=lanczos,fps=30,setsar=1[bg]`);

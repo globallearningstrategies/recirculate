@@ -1,4 +1,4 @@
-import { copyFile, writeFile, readFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, writeFile, readFile, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseLyrics, run } from "./lyric-video";
@@ -18,7 +18,8 @@ export async function renderStudioVideo(input: Input) {
   const dir = await mkdtemp(path.join(tmpdir(), "studio-"));
   try {
     // Relative filter paths also work on Windows, where drive letters contain ':'.
-    await copyFile(path.join(process.cwd(), "assets/fonts/DejaVuSans-Bold.ttf"), path.join(dir, "font.ttf"));
+    await mkdir(path.join(dir, "fonts"));
+    await copyFile(path.join(process.cwd(), "assets/fonts/DejaVuSans-Bold.ttf"), path.join(dir, "fonts", "font.ttf"));
     await writeFile(path.join(dir, "audio"), input.audio);
     await writeFile(path.join(dir, "title.txt"), wrap(input.title, 36));
     if (input.background) await writeFile(path.join(dir, "background"), input.background);
@@ -44,7 +45,7 @@ export async function renderStudioVideo(input: Input) {
       backdrop = "[1:v]null[bg]";
     }
     await writeFile(path.join(dir, "lyrics.ass"), studioSubtitles(wrap(input.title, 36), lines.map(line => ({ ...line, text: wrap(line.text) })), input.duration, ["spiritual", "cosmic"].includes(input.treatment), ["kinetic", "spiritual", "cosmic"].includes(input.treatment)));
-    const filters = ["drawbox=x=480:y=330:w=120:h=4:color=0xBDA6FF:t=fill", "ass=filename=lyrics.ass:fontsdir=."];
+    const filters = ["drawbox=x=480:y=330:w=120:h=4:color=0xBDA6FF:t=fill", "ass=filename=lyrics.ass:fontsdir=fonts"];
     const audio = `[0:a]afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, input.duration - 0.15)}:d=0.15[a]`;
     let graph = `${backdrop};${audio};[bg]${filters.join(",")}[text]`;
     if (input.treatment === "visualizer") {
