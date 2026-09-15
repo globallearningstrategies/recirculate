@@ -1,5 +1,6 @@
 // Shared, browser-safe studio types and validation. No server credentials here.
 export const TREATMENTS = {
+  cosmic: { label: "Cosmic Dreamcore", description: "Original celestial dreamscapes, slow camera movement and soft dissolves · no extra subscription" },
   spiritual: { label: "Spiritual journey", description: "Stars, golden light, Jerusalem silhouettes and flowing water · no AI subscription" },
   kinetic: { label: "Bold lyrics", description: "Animated type over a flowing midnight gradient" },
   visualizer: { label: "Sound waves", description: "Your music drives a luminous waveform" },

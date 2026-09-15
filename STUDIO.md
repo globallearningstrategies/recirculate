@@ -7,7 +7,7 @@ Open `/studio` from the Music clip studio link above the library tabs.
 1. Choose or create a song. Upload its MP3/WAV/M4A (or original video for its audio), optional artwork and optional performance footage. Save the assets once.
 2. Choose up to three excerpts, 10–45 seconds each. **Suggest energetic moments** analyzes the audio in the browser and proposes non-overlapping windows to audition. This is an energy heuristic, not a chorus detector.
 3. Paste lyrics or transcribe each excerpt. Correct sung words and timestamps. `[0:04.750]` means 4.75 seconds into the excerpt, not into the full song. Unstamped lines receive equal time slots.
-4. Choose up to four visual treatments, then create up to 12 drafts. **Spiritual journey** is selected by default and needs only the song audio and lyrics. Start rendering on the review screen. Keep it open; a completed draft is saved after each video. Interrupted batches can resume. Failed requests become retryable after their ten-minute lease expires.
+4. Choose up to four visual treatments, then create up to 12 drafts. **Cosmic Dreamcore** is selected by default and needs only the song audio and lyrics. Start rendering on the review screen. Keep it open; a completed draft is saved after each video. Interrupted batches can resume. Failed requests become retryable after their ten-minute lease expires.
 5. Preview, download, or select completed clips. Choose a connected Instagram/YouTube account and explicitly approve that destination before scheduling. The current connection system supports one account per platform. A separate clips account must be connected before scheduling to it; downloads work for any manually managed account.
 
 ## Notification defaults
@@ -16,10 +16,12 @@ Daily reminder emails/pushes and weekly summary emails are off. Failure alerts r
 
 ## Implementation
 
+- **Cosmic Dreamcore:** apply `supabase/cosmic-dreamcore.sql` after the existing studio migrations. Two original, bundled dreamscapes (Jerusalem gateway and celestial ocean) animate with camera movement, a soft dissolve, subtle light variation, and a vignette. The imagery contains no people. This is reusable AI-created artwork animated by FFmpeg, not newly generated AI footage on each render. No external generation API or subscription is called. Scene motion is rendered at 720×1280/24fps, scaled to 1080×1920/30fps, with captions drawn at final resolution. Scene order varies with the excerpt start. Existing hosting, transcription, and storage costs still apply. Artwork and its creation prompts are recorded in `public/dreamcore/README.md`.
+
 - The additive database setup is in `supabase/studio.sql`. Apply after the base `supabase/schema.sql` on a fresh installation. It adds assets, render jobs, preferences, and account-bound scheduling fields; existing rows remain intact.
 - Original song assets use the **private** `song-assets` bucket (50 MB per file). Signed URLs are used for browser playback. Rendered MP4s use the existing public clips bucket so publishing APIs can retrieve them.
 - Each draft snapshots its inputs. `POST /api/studio/render` claims one job using a compare-and-set timestamp, renders with FFmpeg, and saves a deterministic clip ID and file paths. Retry cannot create a duplicate clip. New clips have no enabled platform rows.
-- Five 1080×1920 treatments: Spiritual journey, moving lyric typography, audio-reactive waveform, artwork camera motion, and performance footage with lyrics. Performance footage must align with the source audio from time zero. No generative-video subscription is required.
+- Six 1080×1920 treatments: Cosmic Dreamcore, Spiritual journey, moving lyric typography, audio-reactive waveform, artwork camera motion, and performance footage with lyrics. Performance footage must align with the source audio from time zero. No generative-video subscription is required.
 - Apply `supabase/spiritual-motion.sql` after `supabase/studio.sql` to enable Spiritual journey. Its software renderer creates evolving stars, a six-pointed star with orbiting light, stylized Jerusalem buildings, aurora ribbons, and water. Scene dissolves follow the excerpt's duration; glow intensity responds to the actual audio amplitude. This is designed animation, not photorealistic AI footage or automatic interpretation of lyric meaning. It uses the existing hosting compute and storage. Backgrounds render at 540×960/24fps and are upscaled to 1080×1920/30fps; lyrics are drawn at final resolution with text shaping enabled for Hebrew. Captions remain line-timed, not word-aligned.
 - Jobs run one at a time from the open browser. This release does not include an unattended background render worker. Rendering may take longer on hosted CPUs than on a workstation.
 - Publishing runs at the existing daily cron time, 14:00 UTC. The UI schedules dates against that cadence and labels it honestly. One due post per platform is attempted per run; backlog waits for later runs.
@@ -33,6 +35,8 @@ Daily reminder emails/pushes and weekly summary emails are off. Failure alerts r
 Set `TEST_RENDER=1` when running the same command to render synthetic test media through all four FFmpeg treatments. Outputs are saved under ignored `.studio-test/`. Each MP4 is decoded and checked for 1080×1920 dimensions and a ten-second duration.
 
 The additional spiritual test renders a 20-second sample with English, Hebrew and mixed lines, checks the full MP4, and extracts frames for visual review. Its audio is a synthetic test tone, not a song. Motion tests cover reproducibility, scene changes and audio response.
+
+`TEST_RENDER=1 node --test tests/cosmic.test.cjs` checks a 20-second Cosmic Dreamcore export with English/Hebrew captions, audio, both scenes, and a full decode. Set `COSMIC_TEST_DURATION=45` to check the maximum excerpt duration.
 
 `node tests/studio-browser.cjs` runs a local-only browser flow with mocked APIs. It needs Playwright (or `PLAYWRIGHT_MODULE` pointing to an installed Playwright module) and Edge. Run render tests first to create the test media. The script creates a temporary development-only page, checks create/render/review/schedule/preferences at desktop and mobile widths, saves screenshots under `.studio-test/`, and removes the page. No real posts or emails are sent.
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseLyrics, run } from "./lyric-video";
 import type { Treatment } from "./studio";
 import { renderSpiritualMotion } from "./spiritual-motion";
+import { cosmicBackdrop } from "./cosmic-dreamcore";
 
 type Input = { audio: Buffer; background?: Buffer; treatment: Treatment; title: string; lyrics: string; start: number; duration: number };
 const wrap = (value: string, width = 22) => value.split(/\s+/).reduce<string[]>((rows, word) => {
@@ -24,7 +25,10 @@ export async function renderStudioVideo(input: Input) {
     if (!lines.length) throw new Error("No lyrics fall inside this excerpt.");
     const args = ["-y", "-threads", "2", "-filter_complex_threads", "1", "-ss", String(input.start), "-t", String(input.duration), "-i", "audio"];
     let backdrop: string;
-    if (input.treatment === "spiritual") {
+    if (input.treatment === "cosmic") {
+      const cosmic = await cosmicBackdrop(dir, input.duration, input.start);
+      args.push(...cosmic.args); backdrop = cosmic.backdrop;
+    } else if (input.treatment === "spiritual") {
       await renderSpiritualMotion(dir, input.start, input.duration);
       args.push("-i", "spiritual.mp4");
       backdrop = "[1:v]scale=1080:1920:flags=lanczos,setsar=1,fps=30[bg]";
@@ -44,9 +48,9 @@ export async function renderStudioVideo(input: Input) {
     for (const [i, line] of lines.entries()) {
       await writeFile(path.join(dir, `line${i}.txt`), wrap(line.text));
       const start = line.start.toFixed(3), end = line.end.toFixed(3);
-      const movement = ["kinetic", "spiritual"].includes(input.treatment) ? `+24*exp(-8*max(0,t-${start}))` : "";
-      const position = input.treatment === "spiritual" ? "h*0.68-text_h/2" : "(h-text_h)/2";
-      const box = input.treatment === "spiritual" ? ":box=1:boxcolor=0x050C19@0.58:boxborderw=22" : "";
+      const movement = ["kinetic", "spiritual", "cosmic"].includes(input.treatment) ? `+24*exp(-8*max(0,t-${start}))` : "";
+      const position = ["spiritual", "cosmic"].includes(input.treatment) ? "h*0.68-text_h/2" : "(h-text_h)/2";
+      const box = ["spiritual", "cosmic"].includes(input.treatment) ? ":box=1:boxcolor=0x050C19@0.58:boxborderw=22" : "";
       filters.push(`drawtext=${common}${box}:textfile=line${i}.txt:fontsize=78:line_spacing=26:x=(w-text_w)/2:y='${position}${movement}':alpha='min(1,max(0,(t-${start})/0.12))':enable='gte(t,${start})*lt(t,${end})'`);
     }
     const audio = `[0:a]afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, input.duration - 0.15)}:d=0.15[a]`;
