@@ -100,7 +100,7 @@ export function run(args: string[], cwd?: string): Promise<void> {
     });
     p.on("error", (error) => { clearTimeout(timeout); reject(error); });
     p.on("close", (code) =>
-      { clearTimeout(timeout); code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.match(/[^\r\n]*(?:No such filter|Error initializing|Error applying|Unable to parse|Option not found)[^\r\n]*/i)?.[0] || err.slice(-600)}`)); }
+      { clearTimeout(timeout); code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.match(/[^\r\n]*(?:No such filter|Error initializing|Error applying|Unable to parse|Option not found)[^\r\n]*/i)?.[0] || err.slice(-8000)}`)); }
     );
   });
 }
