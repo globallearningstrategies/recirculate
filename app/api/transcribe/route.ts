@@ -42,7 +42,8 @@ export async function POST(req: Request) {
   const duration = Math.min(90, Math.max(10, Number(body.duration) || 30));
   const language = ["he", "en", "fr"].includes(body.language) ? body.language : undefined;
 
-  const { data: blob, error: dlErr } = await db.storage.from(BUCKET).download(audioPath);
+  const sourceBucket = body.studio === true ? "song-assets" : BUCKET;
+  const { data: blob, error: dlErr } = await db.storage.from(sourceBucket).download(audioPath);
   if (dlErr || !blob) return NextResponse.json({ error: "Couldn't read the uploaded audio." }, { status: 400 });
 
   let segment: Buffer;
@@ -81,8 +82,8 @@ export async function POST(req: Request) {
   for (const seg of json.segments ?? []) {
     const text = String(seg.text ?? "").trim();
     if (!text) continue;
-    const s = Math.max(0, Math.floor(Number(seg.start) || 0));
-    lines.push(`[${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}] ${text}`);
+    const s = Math.max(0, Number(seg.start) || 0);
+    lines.push(`[${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, "0")}] ${text}`);
     if (lines.length >= 40) break;
   }
   if (lines.length === 0) {
