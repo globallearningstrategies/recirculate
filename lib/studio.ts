@@ -1,5 +1,6 @@
 // Shared, browser-safe studio types and validation. No server credentials here.
 export const TREATMENTS = {
+  spiritual: { label: "Spiritual journey", description: "Stars, golden light, Jerusalem silhouettes and flowing water · no AI subscription" },
   kinetic: { label: "Bold lyrics", description: "Animated type over a flowing midnight gradient" },
   visualizer: { label: "Sound waves", description: "Your music drives a luminous waveform" },
   artwork: { label: "Cover motion", description: "Slow camera movement over your artwork" },
@@ -26,7 +27,7 @@ export function validateExcerpts(value: unknown, audioDuration: number): Excerpt
 }
 
 export function validateTreatments(value: unknown, asset: Pick<StudioAsset, "artwork_path" | "performance_path">): Treatment[] {
-  if (!Array.isArray(value) || !value.length || value.length > 4 || value.some((v) => typeof v !== "string" || !Object.hasOwn(TREATMENTS, v))) throw new Error("Choose at least one visual treatment.");
+  if (!Array.isArray(value) || !value.length || value.length > 4 || value.some((v) => typeof v !== "string" || !Object.hasOwn(TREATMENTS, v))) throw new Error("Choose between one and four visual treatments.");
   const treatments = Array.from(new Set(value)) as Treatment[];
   if (treatments.includes("artwork") && !asset.artwork_path) throw new Error("Upload artwork for Cover motion.");
   if (treatments.includes("performance") && !asset.performance_path) throw new Error("Upload a performance video first.");

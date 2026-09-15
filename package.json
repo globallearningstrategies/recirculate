@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test tests/studio.test.cjs"
+    "test": "node --test tests/studio.test.cjs tests/spiritual.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",

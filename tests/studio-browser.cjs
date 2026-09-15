@@ -66,6 +66,8 @@ let browser;
     await page.screenshot({ path: path.join(out, 'studio-desktop.png'), fullPage: true });
     await page.getByLabel('Length (seconds)').fill('10');
     await page.getByLabel('Lyrics for this moment').fill('[0:00.125] Let the music\n[0:04.750] Find you tonight');
+    assert.equal(await page.getByRole('button', { name: /Spiritual journey/ }).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('button', { name: /Bold lyrics/ }).click();
     await page.getByRole('button', { name: 'Create 2 drafts' }).click();
     await page.getByText('2 drafts queued.', { exact: false }).waitFor();
     await page.getByRole('button', { name: 'Render / resume batch' }).click();

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseLyrics, run } from "./lyric-video";
 import type { Treatment } from "./studio";
+import { renderSpiritualMotion } from "./spiritual-motion";
 
 type Input = { audio: Buffer; background?: Buffer; treatment: Treatment; title: string; lyrics: string; start: number; duration: number };
 const wrap = (value: string, width = 22) => value.split(/\s+/).reduce<string[]>((rows, word) => {
@@ -23,7 +24,11 @@ export async function renderStudioVideo(input: Input) {
     if (!lines.length) throw new Error("No lyrics fall inside this excerpt.");
     const args = ["-y", "-threads", "2", "-filter_complex_threads", "1", "-ss", String(input.start), "-t", String(input.duration), "-i", "audio"];
     let backdrop: string;
-    if (input.treatment === "artwork") {
+    if (input.treatment === "spiritual") {
+      await renderSpiritualMotion(dir, input.start, input.duration);
+      args.push("-i", "spiritual.mp4");
+      backdrop = "[1:v]scale=1080:1920:flags=lanczos,setsar=1,fps=30[bg]";
+    } else if (input.treatment === "artwork") {
       args.push("-loop", "1", "-framerate", "30", "-i", "background");
       backdrop = "[1:v]scale=1200:2134:force_original_aspect_ratio=increase,crop=1200:2134,zoompan=z='min(zoom+0.0003,1.15)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s=1080x1920:fps=30,setsar=1,drawbox=c=black@0.35:t=fill[bg]";
     } else if (input.treatment === "performance") {
@@ -33,14 +38,16 @@ export async function renderStudioVideo(input: Input) {
       args.push("-f", "lavfi", "-i", "gradients=size=1080x1920:c0=0x100B29:c1=0x513B81:speed=0.015:rate=30");
       backdrop = "[1:v]null[bg]";
     }
-    const common = "fontfile=font.ttf:fontcolor=white:shadowcolor=black@0.55:shadowx=2:shadowy=3";
+    const common = "fontfile=font.ttf:text_shaping=1:expansion=none:fontcolor=white:shadowcolor=black@0.55:shadowx=2:shadowy=3";
     const filters = [`drawtext=${common}:textfile=title.txt:fontsize=38:x=(w-text_w)/2:y=210:line_spacing=12`,
       "drawbox=x=480:y=330:w=120:h=4:color=0xBDA6FF:t=fill"];
     for (const [i, line] of lines.entries()) {
       await writeFile(path.join(dir, `line${i}.txt`), wrap(line.text));
       const start = line.start.toFixed(3), end = line.end.toFixed(3);
-      const movement = input.treatment === "kinetic" ? `+24*exp(-8*max(0,t-${start}))` : "";
-      filters.push(`drawtext=${common}:textfile=line${i}.txt:fontsize=78:line_spacing=26:x=(w-text_w)/2:y='(h-text_h)/2${movement}':alpha='min(1,max(0,(t-${start})/0.12))':enable='gte(t,${start})*lt(t,${end})'`);
+      const movement = ["kinetic", "spiritual"].includes(input.treatment) ? `+24*exp(-8*max(0,t-${start}))` : "";
+      const position = input.treatment === "spiritual" ? "h*0.68-text_h/2" : "(h-text_h)/2";
+      const box = input.treatment === "spiritual" ? ":box=1:boxcolor=0x050C19@0.58:boxborderw=22" : "";
+      filters.push(`drawtext=${common}${box}:textfile=line${i}.txt:fontsize=78:line_spacing=26:x=(w-text_w)/2:y='${position}${movement}':alpha='min(1,max(0,(t-${start})/0.12))':enable='gte(t,${start})*lt(t,${end})'`);
     }
     const audio = `[0:a]afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, input.duration - 0.15)}:d=0.15[a]`;
     let graph = `${backdrop};${audio};[bg]${filters.join(",")}[text]`;
