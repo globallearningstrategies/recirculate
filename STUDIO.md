@@ -58,3 +58,14 @@ Transcription defaults to mixed Hebrew/English auto-detection. Users can type He
 
 The studio now uses short phrase cards with explicit start and end times, audition playback, playhead timing buttons, splitting, Hebrew/English text and a live caption preview. Existing timestamped verses are split with estimated timing for owner review. New studio transcriptions request word and segment timestamps and group words into short phrases, retaining silence between sung phrases. End times survive saving and rendering through the serialized [m:ss.sss --> m:ss.sss] format; no schema migration is needed. Server validation rejects overlaps and out-of-range times. The title fades after the opening 2.5 seconds. Previous completed videos remain unchanged until a corrected draft is rendered.
 
+# Cinematic AI (Runway)
+
+The studio includes an owner-only Cinematic AI panel. Set `RUNWAYML_API_SECRET` in Vercel Production. Production builds make a read-only organization request to validate the key; they never generate media. Apply `supabase/cinematic.sql` before deploying this feature.
+
+- A five-second visual test costs 60 credits ($0.60 before tax). Full projects generate distinct five-second Gen-4.5 scenes, rounding up to cover the selected draft. A 20-second draft costs 240 credits ($2.40). Pricing was checked September 15, 2026 against Runway's official API pricing.
+- Each project requires a visible price review and explicit checkbox/button confirmation. Fixed prompts describe uninhabited spiritual cosmic landscapes. Only visual prompts are sent to Runway; song audio and captions stay in Recirculate.
+- `cinematic_runs` persists the source draft snapshot, authorized plan, submission intent, task IDs, saved scene paths and reported scene cost. RLS exposes only the owner's reads; all writes go through authenticated server routes. Only one active project is allowed per owner.
+- The browser advances one durable step at a time and polls at least five seconds apart. Returning users tap Resume. A submission with an uncertain outcome stops without automatic retry. Failed generations require review in Runway before a new paid project; successful earlier scenes remain in private storage.
+- Scenes are assembled as cuts into a private 720p background, with no repeated loop. A new `cinematic` draft uses that background at time zero and the original song at its excerpt offset. Final rendering exports 1080p with editable bilingual captions. Caption revisions reuse the background and do not call Runway.
+- The five-second test is visual-only. Full projects still require Render / resume batch to add song and captions. Existing videos and schedules are preserved.
+- Tests cover owner/auth checks, quote validation, concurrency, ambiguous submissions, real scene assembly, bilingual rendering with a nonzero song offset, and mobile confirmation UI. Runway calls are mocked in tests. Actual artistic quality requires the user's first paid test.

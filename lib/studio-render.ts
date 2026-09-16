@@ -48,8 +48,9 @@ export async function renderStudioVideo(input: Input) {
     } else if (input.treatment === "artwork") {
       args.push("-loop", "1", "-framerate", "30", "-i", "background");
       backdrop = "[1:v]scale=1200:2134:force_original_aspect_ratio=increase,crop=1200:2134,zoompan=z='min(zoom+0.0003,1.15)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s=1080x1920:fps=30,setsar=1,drawbox=c=black@0.35:t=fill[bg]";
-    } else if (input.treatment === "performance") {
-      args.push("-ss", String(input.start), "-t", String(input.duration), "-i", "background");
+    } else if (input.treatment === "performance" || input.treatment === "cinematic") {
+      // Generated footage starts at zero; the song still starts at its excerpt offset.
+      args.push("-ss", String(input.treatment === "cinematic" ? 0 : input.start), "-t", String(input.duration), "-i", "background");
       backdrop = "[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,drawbox=c=black@0.28:t=fill[bg]";
     } else {
       args.push("-f", "lavfi", "-i", "gradients=size=1080x1920:c0=0x100B29:c1=0x513B81:speed=0.015:rate=30");

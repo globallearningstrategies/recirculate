@@ -5,6 +5,8 @@ const nextConfig = {
     // webpack bundle, and make sure the binary + font ship with the function.
     serverComponentsExternalPackages: ["ffmpeg-static"],
     outputFileTracingIncludes: {
+      "/api/studio/cinematic": ["./node_modules/ffmpeg-static/ffmpeg"],
+      "/api/studio/cinematic/route": ["./node_modules/ffmpeg-static/ffmpeg"],
       "/api/studio/render": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**", "./public/dreamcore/**"],
       "/api/studio/render/route": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**", "./public/dreamcore/**"],
       "/api/lyric-video": ["./node_modules/ffmpeg-static/ffmpeg", "./assets/fonts/**"],

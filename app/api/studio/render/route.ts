@@ -29,7 +29,7 @@ export async function POST(req: Request) {
       return Buffer.from(await data.arrayBuffer());
     };
     const audio = await download(job.audio_path);
-    const background = job.treatment === "artwork" ? await download(job.artwork_path) : job.treatment === "performance" ? await download(job.performance_path) : undefined;
+    const background = job.treatment === "artwork" ? await download(job.artwork_path) : ["performance", "cinematic"].includes(job.treatment) ? await download(job.performance_path) : undefined;
     const { video, thumb } = await renderStudioVideo({ audio, background, treatment: job.treatment, title: job.title.split(" · ")[0], lyrics: job.lyrics, start: job.start_seconds, duration: job.duration_seconds });
     const videoPath = `${user.id}/studio/${job.id}.mp4`, thumbPath = `${user.id}/studio/${job.id}.jpg`;
     const videoUpload = await db.storage.from(BUCKET).upload(videoPath, video, { contentType: "video/mp4", upsert: true });

@@ -1,6 +1,7 @@
 // Shared, browser-safe studio types and validation. No server credentials here.
 import { parseCues, serializeCues, validateCues } from "./lyric-cues";
 export const TREATMENTS = {
+  cinematic: { label: "Cinematic AI", description: "Runway-generated scenes with your music and phrase captions" },
   cosmic: { label: "Cosmic Dreamcore", description: "Continuous animated gates, rolling water, orbiting planets and flowing stars · no extra subscription" },
   spiritual: { label: "Spiritual journey", description: "Stars, golden light, Jerusalem silhouettes and flowing water · no AI subscription" },
   kinetic: { label: "Bold lyrics", description: "Animated type over a flowing midnight gradient" },
@@ -32,6 +33,7 @@ export function validateExcerpts(value: unknown, audioDuration: number): Excerpt
 export function validateTreatments(value: unknown, asset: Pick<StudioAsset, "artwork_path" | "performance_path">): Treatment[] {
   if (!Array.isArray(value) || !value.length || value.length > 4 || value.some((v) => typeof v !== "string" || !Object.hasOwn(TREATMENTS, v))) throw new Error("Choose between one and four visual treatments.");
   const treatments = Array.from(new Set(value)) as Treatment[];
+  if (treatments.includes("cinematic")) throw new Error("Use Cinematic AI to review pricing and generate footage for a saved draft first.");
   if (treatments.includes("artwork") && !asset.artwork_path) throw new Error("Upload artwork for Cover motion.");
   if (treatments.includes("performance") && !asset.performance_path) throw new Error("Upload a performance video first.");
   return treatments;

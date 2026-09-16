@@ -42,7 +42,11 @@ let browser;
     await page.route('**/api/studio/**', async (route) => {
       const url = route.request().url(), method = route.request().method();
       let json = { ok: true };
-      if (url.endsWith('/preferences')) { if (method === 'PUT') prefs = route.request().postDataJSON(); json = prefs; }
+      if (url.endsWith('/cinematic')) {
+        if (method !== 'GET') throw new Error('This UI test must never submit a paid generation.');
+        json = { connection: 'Connected', credits: 500, runs: [] };
+      }
+      else if (url.endsWith('/preferences')) { if (method === 'PUT') prefs = route.request().postDataJSON(); json = prefs; }
       else if (url.endsWith('/batches') && method === 'GET') json = { jobs };
       else if (url.endsWith('/batches')) {
         const body = route.request().postDataJSON();
@@ -119,6 +123,19 @@ let browser;
     await page.screenshot({ path: path.join(out, 'studio-mobile.png'), fullPage: true });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, 'Mobile horizontal overflow');
+    await page.getByRole('button', {name:'Preview price: 5-second test · $0.60'}).click();
+    const paid = page.getByRole('button',{name:'Generate · $0.60',exact:true});
+    assert.equal(await paid.isEnabled(),false);
+    await page.getByLabel('Use 60 of my Runway credits for this project.').check();
+    assert.equal(await paid.isEnabled(),true);
+    await page.locator('.cinematic-quote').screenshot({path:path.join(out,'cinematic-confirm-mobile.png')});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+    await page.locator('.cinematic-quote').getByRole('button',{name:'Cancel',exact:true}).click();
+    await page.getByLabel('Make a cinematic version of').selectOption('revised-job');
+    await page.getByRole('button',{name:'Review scenes & price'}).click();
+    assert.equal(await page.getByRole('button',{name:'Generate · $1.20',exact:true}).isEnabled(),false);
+    await page.getByText('120 credits · $1.20 before tax',{exact:true}).waitFor();
+    await page.locator('.cinematic-quote').getByRole('button',{name:'Cancel',exact:true}).click();
     assert.deepEqual(errors, []);
     // A missing JavaScript bundle must leave a usable, server-rendered recovery link.
     const noJs = await browser.newContext({ javaScriptEnabled: false });
